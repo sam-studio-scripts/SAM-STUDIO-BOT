@@ -25,7 +25,7 @@ const http = require("http");
 // ================= CONFIG & ENV =================
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
-const PANEL_CHANNEL_ID = "1525147897744720033";
+const PANEL_CHANNEL_ID = "1526597563736916028";
 const STAFF_ROLE_ID = "1526597468861763825";
 const VERIFIED_ROLE_ID = "1526597473970294914";
 const WELCOME_CHANNEL_ID = process.env.WELCOME_CHANNEL;
