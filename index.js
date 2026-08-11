@@ -3337,7 +3337,7 @@ client.on(
                         )
 
                         .setImage(
-                            "https://cdn.discordapp.com/attachments/1525436919557914655/1525446030529794089/ChatGPT_Image_Jul_11_2026_03_17_45_PM.png?ex=6a5369d3&is=6a521853&hm=6c54f6174190b7ed868ff6c83a27a5a56c978c1e92fcc271242e2e2118bc909d&"
+                            "https://discord.com/channels/884214421747007488/1533736092610859028/1536546340304068639"
                         )
 
                         .setFooter({
