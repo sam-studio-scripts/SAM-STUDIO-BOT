@@ -28,6 +28,7 @@ const VERIFIED_ROLE_ID = "1526597473970294914";
 const WELCOME_CHANNEL_ID = process.env.WELCOME_CHANNEL;
 const GOODBYE_CHANNEL_ID = process.env.GOODBYE_CHANNEL;
 const CLOSED_CATEGORY_ID = "1536545669270077460";
+const STORE_URL = "https://sam-studio.tebex.store/";
 
 // Log Channels
 const LOG_CHANNELS = {
@@ -1135,38 +1136,37 @@ client.on(
                     }
 
                     const embed = new EmbedBuilder()
-                        .setTitle("SAM STUDIO | RedM Support & Sales")
+                        .setTitle("SAM STUDIO • RedM Support")
                         .setColor(0x2b2d31)
                         .setDescription(
-                            "Choose a button below to open the right ticket.\n\n" +
-                            "🛒 **Purchase** — Scripts / products\n" +
-                            "🛠️ **General Support** — General help\n" +
-                            "💎 **Premium Support** — Purchased script support\n" +
-                            "🏠 **Purchase MLO** — MLO orders\n" +
-                            "🧍 **Purchase Ped** — Custom / ready ped orders"
+                            "**Premium RedM Scripts, MLOs & Custom Peds**\n" +
+                            "Select an option below and our team will assist you."
                         )
                         .setThumbnail(SMALL_IMAGE)
                         .setImage(TICKET_IMAGE)
                         .setFooter({
-                            text: "© SAM STUDIO | RedM Scripts & Services"
+                            text: "SAM STUDIO • RedM Scripts & Services"
                         });
 
-                    const ticketButtons = new ActionRowBuilder().addComponents(
+                    const ticketButtonsRow1 = new ActionRowBuilder().addComponents(
                         new ButtonBuilder()
                             .setCustomId("ticket_open_purchase")
-                            .setLabel("Purchase")
+                            .setLabel("Purchase Script")
                             .setEmoji("🛒")
                             .setStyle(ButtonStyle.Success),
-                        new ButtonBuilder()
-                            .setCustomId("ticket_open_general_support")
-                            .setLabel("General Support")
-                            .setEmoji("🛠️")
-                            .setStyle(ButtonStyle.Secondary),
                         new ButtonBuilder()
                             .setCustomId("ticket_open_premium_support")
                             .setLabel("Premium Support")
                             .setEmoji("💎")
                             .setStyle(ButtonStyle.Primary),
+                        new ButtonBuilder()
+                            .setCustomId("ticket_open_general_support")
+                            .setLabel("General Support")
+                            .setEmoji("🛠️")
+                            .setStyle(ButtonStyle.Secondary)
+                    );
+
+                    const ticketButtonsRow2 = new ActionRowBuilder().addComponents(
                         new ButtonBuilder()
                             .setCustomId("ticket_open_purchase_mlo")
                             .setLabel("Purchase MLO")
@@ -1176,12 +1176,17 @@ client.on(
                             .setCustomId("ticket_open_purchase_ped")
                             .setLabel("Purchase Ped")
                             .setEmoji("🧍")
-                            .setStyle(ButtonStyle.Secondary)
+                            .setStyle(ButtonStyle.Secondary),
+                        new ButtonBuilder()
+                            .setLabel("Visit Store")
+                            .setEmoji("🌐")
+                            .setStyle(ButtonStyle.Link)
+                            .setURL(STORE_URL)
                     );
 
                     return interaction.reply({
                         embeds: [embed],
-                        components: [ticketButtons]
+                        components: [ticketButtonsRow1, ticketButtonsRow2]
                     });
                 }
 
@@ -2225,8 +2230,10 @@ client.on(
                     )
                     .addFields(
                         { name: "Ticket", value: `#${ticketId}`, inline: true },
+                        { name: "Customer", value: `<@${interaction.user.id}>`, inline: true },
+                        { name: "Department", value: TICKET_LABELS[type] || "Support", inline: true },
                         { name: "Status", value: TICKET_STATUS.waiting_staff.label, inline: true },
-                        { name: "Claimed By", value: "Not Claimed", inline: true },
+                        { name: "Assigned", value: "Not Claimed", inline: true },
                         ...formFields
                     )
                     .setFooter({
