@@ -26,11 +26,11 @@ const http = require("http");
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const PANEL_CHANNEL_ID = "1525147897744720033";
-const STAFF_ROLE_ID = "1525147649723072663";
-const VERIFIED_ROLE_ID = "1359231814547275966";
+const STAFF_ROLE_ID = "1526597468861763825";
+const VERIFIED_ROLE_ID = "1526597473970294914";
 const WELCOME_CHANNEL_ID = process.env.WELCOME_CHANNEL;
 const GOODBYE_CHANNEL_ID = process.env.GOODBYE_CHANNEL;
-const CLOSED_CATEGORY_ID = "1525148029668163703";
+const CLOSED_CATEGORY_ID = "1536545669270077460";
 
 // Log Channels
 const LOG_CHANNELS = {
@@ -84,10 +84,10 @@ const EMOJIS = {
 
 // ================= TICKET IMAGES =================
 const SMALL_IMAGE =
-    "https://cdn.discordapp.com/attachments/1525436919557914655/1525458769784340551/IMG_0791.jpg?ex=6a5375b0&is=6a522430&hm=d45872a3672e8628ebd3bb27a535929f9b4d08d534ccad22a7896c0cd5079dc6&";
+    "https://cdn.discordapp.com/attachments/1533736092610859028/1536546430334795837/C-_Users_WILAYA1_AppData_Local_Temp_Layer-1.png?ex=6a7bcbe0&is=6a7a7a60&hm=1bd59b2f732df993da14e7ff8ed333ca8225777dca7b8ea97c57c267dafdf5f2&";
 
 const TICKET_IMAGE =
-    "https://cdn.discordapp.com/attachments/1525436919557914655/1525458565525934180/ChatGPT_Image_Jul_11_2026_04_07_29_PM.png?ex=6a53757f&is=6a5223ff&hm=80e70c263d4e8757299467f1ee65dfb5d136de3c522a5c1fba80705321693bf0&";
+    "https://cdn.discordapp.com/attachments/1533736092610859028/1536546340245602455/ChatGPT_Image_Jul_22_2026_02_37_49_AM.png?ex=6a7bcbcb&is=6a7a7a4b&hm=f5720415b49b1b1aad26b1156bc4e3d5225d5fc32ee701b04eb6fdc55ad106e2&";
 
 // ================= DATA STORES =================
 let warnings = {};
