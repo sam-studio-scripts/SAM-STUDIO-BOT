@@ -1,0 +1,17 @@
+{
+  "name": "sam-studio-discord-bot",
+  "version": "1.0.0",
+  "description": "SAM STUDIO Discord bot with ticket system, moderation, logs, anti-ping, giveaways and invite tracking.",
+  "main": "midnight.js",
+  "scripts": {
+    "start": "node midnight.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "ISC"
+}
