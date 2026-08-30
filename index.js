@@ -98,6 +98,32 @@ const ANTI_PING_MEMBERS = new Set();
 const ANTI_PING_ROLE_ID = "890136671050424340";
 const antiPingAttempts = new Map();
 
+// ================= 1,000 REALISTIC CUSTOM NAMES =================
+// 50 first names x 20 surnames = exactly 1,000 unique full names.
+const REAL_FIRST_NAMES = [
+    "Adam", "Adrian", "Aiden", "Amir", "Andrew",
+    "Benjamin", "Caleb", "Daniel", "David", "Elias",
+    "Ethan", "Gabriel", "Hamza", "Henry", "Isaac",
+    "Jacob", "James", "Liam", "Lucas", "Mason",
+    "Noah", "Oliver", "Ryan", "Samuel", "William",
+    "Amelia", "Ava", "Charlotte", "Chloe", "Eleanor",
+    "Ella", "Emily", "Emma", "Evelyn", "Grace",
+    "Hannah", "Harper", "Isabella", "Layla", "Lily",
+    "Mia", "Nora", "Olivia", "Ruby", "Sarah",
+    "Sofia", "Victoria", "Violet", "Yasmin", "Zoe"
+];
+
+const REAL_LAST_NAMES = [
+    "Adams", "Anderson", "Baker", "Bennett", "Brooks",
+    "Carter", "Clark", "Collins", "Cooper", "Davis",
+    "Edwards", "Evans", "Foster", "Garcia", "Harris",
+    "Hughes", "Johnson", "Lewis", "Miller", "Parker"
+];
+
+const REAL_CUSTOM_NAMES = REAL_FIRST_NAMES.flatMap(firstName =>
+    REAL_LAST_NAMES.map(lastName => `${firstName} ${lastName}`)
+);
+
 // ================= CLIENT =================
 const client = new Client({
     intents: [
@@ -210,6 +236,39 @@ function matchesBulkDate(member, dateType, condition, dateWindow) {
         timestamp >= dateWindow.start &&
         timestamp <= dateWindow.end
     );
+}
+
+function matchesBulkTarget(member, targetType) {
+    if (targetType === "bots") {
+        return member.user.bot;
+    }
+
+    if (targetType === "all") {
+        return true;
+    }
+
+    return !member.user.bot;
+}
+
+function getBulkTargetLabel(targetType) {
+    if (targetType === "bots") return "bot members";
+    if (targetType === "all") return "all members";
+
+    return "human members";
+}
+
+function getShuffledRealNames() {
+    const names = [...REAL_CUSTOM_NAMES];
+
+    for (let index = names.length - 1; index > 0; index--) {
+        const randomIndex = Math.floor(Math.random() * (index + 1));
+        [names[index], names[randomIndex]] = [
+            names[randomIndex],
+            names[index]
+        ];
+    }
+
+    return names;
 }
 
 function truncateDiscordNickname(value) {
@@ -983,10 +1042,10 @@ const commands = [
         .addSubcommand(subcommand =>
             subcommand
                 .setName("rename")
-                .setDescription("Bulk change nicknames for members selected by date")
+                .setDescription("Add text to or replace existing nicknames")
                 .addStringOption(o =>
                     o.setName("date")
-                        .setDescription("Date in YYYY-MM-DD format (UTC)")
+                        .setDescription("Date in YYYY-MM-DD format")
                         .setRequired(true)
                 )
                 .addStringOption(o =>
@@ -1020,6 +1079,25 @@ const commands = [
                             {
                                 name: "On or after this date",
                                 value: "after"
+                            }
+                        )
+                )
+                .addStringOption(o =>
+                    o.setName("target_type")
+                        .setDescription("Which type of members should be renamed?")
+                        .setRequired(true)
+                        .addChoices(
+                            {
+                                name: "Human members only",
+                                value: "humans"
+                            },
+                            {
+                                name: "Bot members only",
+                                value: "bots"
+                            },
+                            {
+                                name: "All human and bot members",
+                                value: "all"
                             }
                         )
                 )
@@ -1072,7 +1150,7 @@ const commands = [
                 )
                 .addStringOption(o =>
                     o.setName("date")
-                        .setDescription("Date in YYYY-MM-DD format (UTC)")
+                        .setDescription("Date in YYYY-MM-DD format")
                         .setRequired(true)
                 )
                 .addStringOption(o =>
@@ -1106,6 +1184,180 @@ const commands = [
                             {
                                 name: "On or after this date",
                                 value: "after"
+                            }
+                        )
+                )
+                .addStringOption(o =>
+                    o.setName("target_type")
+                        .setDescription("Which type of members should receive the role?")
+                        .setRequired(true)
+                        .addChoices(
+                            {
+                                name: "Human members only",
+                                value: "humans"
+                            },
+                            {
+                                name: "Bot members only",
+                                value: "bots"
+                            },
+                            {
+                                name: "All human and bot members",
+                                value: "all"
+                            }
+                        )
+                )
+                .addIntegerOption(o =>
+                    o.setName("utc_offset")
+                        .setDescription("Timezone offset; use 5 for Pakistan (default 0)")
+                        .setMinValue(-12)
+                        .setMaxValue(14)
+                        .setRequired(false)
+                )
+                .addBooleanOption(o =>
+                    o.setName("preview")
+                        .setDescription("Count matching members without changing them")
+                        .setRequired(false)
+                )
+        )
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName("remove_role")
+                .setDescription("Remove a role from members selected by date")
+                .addRoleOption(o =>
+                    o.setName("role")
+                        .setDescription("Role to remove")
+                        .setRequired(true)
+                )
+                .addStringOption(o =>
+                    o.setName("date")
+                        .setDescription("Date in YYYY-MM-DD format")
+                        .setRequired(true)
+                )
+                .addStringOption(o =>
+                    o.setName("date_type")
+                        .setDescription("Which member date should be checked?")
+                        .setRequired(true)
+                        .addChoices(
+                            {
+                                name: "Server join date",
+                                value: "joined"
+                            },
+                            {
+                                name: "Discord account creation date",
+                                value: "created"
+                            }
+                        )
+                )
+                .addStringOption(o =>
+                    o.setName("condition")
+                        .setDescription("How the selected date should be matched")
+                        .setRequired(true)
+                        .addChoices(
+                            {
+                                name: "Only on this date",
+                                value: "on"
+                            },
+                            {
+                                name: "On or before this date",
+                                value: "before"
+                            },
+                            {
+                                name: "On or after this date",
+                                value: "after"
+                            }
+                        )
+                )
+                .addStringOption(o =>
+                    o.setName("target_type")
+                        .setDescription("Which type of members should lose the role?")
+                        .setRequired(true)
+                        .addChoices(
+                            {
+                                name: "Human members only",
+                                value: "humans"
+                            },
+                            {
+                                name: "Bot members only",
+                                value: "bots"
+                            },
+                            {
+                                name: "All human and bot members",
+                                value: "all"
+                            }
+                        )
+                )
+                .addIntegerOption(o =>
+                    o.setName("utc_offset")
+                        .setDescription("Timezone offset; use 5 for Pakistan (default 0)")
+                        .setMinValue(-12)
+                        .setMaxValue(14)
+                        .setRequired(false)
+                )
+                .addBooleanOption(o =>
+                    o.setName("preview")
+                        .setDescription("Count matching members without changing them")
+                        .setRequired(false)
+                )
+        )
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName("real_names")
+                .setDescription("Assign unique names from 1,000 realistic names")
+                .addStringOption(o =>
+                    o.setName("date")
+                        .setDescription("Date in YYYY-MM-DD format")
+                        .setRequired(true)
+                )
+                .addStringOption(o =>
+                    o.setName("date_type")
+                        .setDescription("Which member date should be checked?")
+                        .setRequired(true)
+                        .addChoices(
+                            {
+                                name: "Server join date",
+                                value: "joined"
+                            },
+                            {
+                                name: "Discord account creation date",
+                                value: "created"
+                            }
+                        )
+                )
+                .addStringOption(o =>
+                    o.setName("condition")
+                        .setDescription("How the selected date should be matched")
+                        .setRequired(true)
+                        .addChoices(
+                            {
+                                name: "Only on this date",
+                                value: "on"
+                            },
+                            {
+                                name: "On or before this date",
+                                value: "before"
+                            },
+                            {
+                                name: "On or after this date",
+                                value: "after"
+                            }
+                        )
+                )
+                .addStringOption(o =>
+                    o.setName("target_type")
+                        .setDescription("Which type of members should receive real names?")
+                        .setRequired(true)
+                        .addChoices(
+                            {
+                                name: "Human members only",
+                                value: "humans"
+                            },
+                            {
+                                name: "Bot members only",
+                                value: "bots"
+                            },
+                            {
+                                name: "All human and bot members",
+                                value: "all"
                             }
                         )
                 )
@@ -1225,6 +1477,12 @@ client.once(
 
             console.log(
                 "Slash Commands Registered ✅"
+            );
+
+            console.log(
+                `Registered Commands: ${commands
+                    .map(command => `/${command.name}`)
+                    .join(", ")}`
             );
 
         } catch (err) {
@@ -2187,6 +2445,8 @@ client.on(
                         interaction.options.getString("date_type", true);
                     const condition =
                         interaction.options.getString("condition", true);
+                    const targetType =
+                        interaction.options.getString("target_type", true);
                     const preview =
                         interaction.options.getBoolean("preview") || false;
                     const utcOffset =
@@ -2203,8 +2463,13 @@ client.on(
                         });
                     }
 
+                    const isNicknameAction =
+                        subcommand === "rename" ||
+                        subcommand === "real_names";
+                    const isRemoveRole =
+                        subcommand === "remove_role";
                     const requiredPermission =
-                        subcommand === "rename"
+                        isNicknameAction
                             ? PermissionsBitField.Flags.ManageNicknames
                             : PermissionsBitField.Flags.ManageRoles;
 
@@ -2215,7 +2480,7 @@ client.on(
                     ) {
                         return interaction.reply({
                             content:
-                                subcommand === "rename"
+                                isNicknameAction
                                     ? "❌ You need Manage Nicknames permission."
                                     : "❌ You need Manage Roles permission.",
                             flags:
@@ -2233,7 +2498,7 @@ client.on(
                     ) {
                         return interaction.reply({
                             content:
-                                subcommand === "rename"
+                                isNicknameAction
                                     ? "❌ Give the bot Manage Nicknames permission first."
                                     : "❌ Give the bot Manage Roles permission first.",
                             flags:
@@ -2243,7 +2508,10 @@ client.on(
 
                     let role = null;
 
-                    if (subcommand === "role") {
+                    if (
+                        subcommand === "role" ||
+                        subcommand === "remove_role"
+                    ) {
                         role =
                             interaction.options.getRole("role", true);
 
@@ -2254,7 +2522,7 @@ client.on(
                         ) {
                             return interaction.reply({
                                 content:
-                                    "❌ I cannot assign this role. Move the bot role above it and do not select @everyone or an integration role.",
+                                    "❌ I cannot manage this role. Move the bot role above it and do not select @everyone or an integration role.",
                                 flags:
                                     MessageFlags.Ephemeral
                             });
@@ -2273,7 +2541,7 @@ client.on(
                         ) {
                             return interaction.reply({
                                 content:
-                                    "❌ You can only bulk-assign roles below your highest role.",
+                                    "❌ You can only bulk-manage roles below your highest role.",
                                 flags:
                                     MessageFlags.Ephemeral
                             });
@@ -2289,7 +2557,7 @@ client.on(
                         await interaction.guild.members.fetch();
                     const selectedMembers =
                         Array.from(members.values()).filter(member =>
-                            !member.user.bot &&
+                            matchesBulkTarget(member, targetType) &&
                             matchesBulkDate(
                                 member,
                                 dateType,
@@ -2309,11 +2577,11 @@ client.on(
                                 ? "on or after"
                                 : "on";
                     const selectionLabel =
-                        `${dateTypeLabel} ${conditionLabel} ${dateString} (${formatBulkUtcOffset(utcOffset)})`;
+                        `${getBulkTargetLabel(targetType)} with ${dateTypeLabel} ${conditionLabel} ${dateString} (${formatBulkUtcOffset(utcOffset)})`;
 
                     if (selectedMembers.length === 0) {
                         return interaction.editReply(
-                            `ℹ️ No human members matched: ${selectionLabel}.`
+                            `ℹ️ No members matched: ${selectionLabel}.`
                         );
                     }
 
@@ -2323,22 +2591,38 @@ client.on(
                                 member.manageable &&
                                 member.id !== interaction.guild.ownerId
                             );
-                        const alreadyHasRole =
+                        const membersWithRole =
                             role
-                                ? manageable.filter(member =>
+                                ? selectedMembers.filter(member =>
                                     member.roles.cache.has(role.id)
                                 ).length
                                 : 0;
+
+                        let previewDetail;
+
+                        if (subcommand === "role") {
+                            previewDetail =
+                                `Already have ${role.name}: ${membersWithRole}`;
+                        } else if (subcommand === "remove_role") {
+                            previewDetail =
+                                `Currently have ${role.name}: ${membersWithRole}`;
+                        } else if (subcommand === "real_names") {
+                            previewDetail =
+                                `Can receive unique names: ${Math.min(manageable.length, REAL_CUSTOM_NAMES.length)}/${REAL_CUSTOM_NAMES.length}`;
+                        } else {
+                            previewDetail =
+                                "Run again with preview:false to rename them.";
+                        }
 
                         return interaction.editReply(
                             [
                                 "🔎 **Bulk preview only — no changes made**",
                                 `Selection: ${selectionLabel}`,
-                                `Matching human members: ${selectedMembers.length}`,
-                                `Manageable by bot: ${manageable.length}`,
-                                role
-                                    ? `Already have ${role.name}: ${alreadyHasRole}`
-                                    : "Run the command again with preview:false to rename them."
+                                `Matching members: ${selectedMembers.length}`,
+                                isNicknameAction
+                                    ? `Nickname-manageable by bot: ${manageable.length}`
+                                    : `Selected for role action: ${selectedMembers.length}`,
+                                previewDetail
                             ].join("\n")
                         );
                     }
@@ -2349,11 +2633,25 @@ client.on(
                     let failed = 0;
                     let processed = 0;
 
-                    if (subcommand === "rename") {
+                    if (isNicknameAction) {
                         const mode =
-                            interaction.options.getString("mode", true);
+                            subcommand === "rename"
+                                ? interaction.options.getString("mode", true)
+                                : null;
                         const text =
-                            interaction.options.getString("text", true);
+                            subcommand === "rename"
+                                ? interaction.options.getString("text", true)
+                                : null;
+                        const realNamePool =
+                            subcommand === "real_names"
+                                ? getShuffledRealNames()
+                                : [];
+                        const nicknameActionLabel =
+                            subcommand === "real_names"
+                                ? "Bulk real-name assignment"
+                                : "Bulk rename";
+                        let realNameIndex = 0;
+                        let poolExhausted = 0;
 
                         for (const member of selectedMembers) {
                             processed++;
@@ -2365,7 +2663,22 @@ client.on(
                                 skipped++;
                                 await updateBulkProgress(
                                     interaction,
-                                    "Bulk rename",
+                                    nicknameActionLabel,
+                                    processed,
+                                    selectedMembers.length
+                                );
+                                continue;
+                            }
+
+                            if (
+                                subcommand === "real_names" &&
+                                realNameIndex >= realNamePool.length
+                            ) {
+                                skipped++;
+                                poolExhausted++;
+                                await updateBulkProgress(
+                                    interaction,
+                                    nicknameActionLabel,
                                     processed,
                                     selectedMembers.length
                                 );
@@ -2378,13 +2691,16 @@ client.on(
                                 member.user.username;
 
                             if (
-                                (mode === "prefix" && currentName.startsWith(text)) ||
-                                (mode === "suffix" && currentName.endsWith(text))
+                                subcommand === "rename" &&
+                                (
+                                    (mode === "prefix" && currentName.startsWith(text)) ||
+                                    (mode === "suffix" && currentName.endsWith(text))
+                                )
                             ) {
                                 unchanged++;
                                 await updateBulkProgress(
                                     interaction,
-                                    "Bulk rename",
+                                    nicknameActionLabel,
                                     processed,
                                     selectedMembers.length
                                 );
@@ -2392,7 +2708,9 @@ client.on(
                             }
 
                             const newNickname =
-                                buildBulkNickname(member, mode, text);
+                                subcommand === "real_names"
+                                    ? realNamePool[realNameIndex++]
+                                    : buildBulkNickname(member, mode, text);
 
                             if (!newNickname) {
                                 failed++;
@@ -2405,7 +2723,7 @@ client.on(
                                 try {
                                     await member.setNickname(
                                         newNickname,
-                                        `Bulk rename by ${interaction.user.tag}`
+                                        `${nicknameActionLabel} by ${interaction.user.tag}`
                                     );
                                     changed++;
                                 } catch (error) {
@@ -2415,7 +2733,7 @@ client.on(
 
                             await updateBulkProgress(
                                 interaction,
-                                "Bulk rename",
+                                nicknameActionLabel,
                                 processed,
                                 selectedMembers.length
                             );
@@ -2423,7 +2741,11 @@ client.on(
 
                         const log = new EmbedBuilder()
                             .setColor("#5865F2")
-                            .setTitle("Bulk Nickname Update")
+                            .setTitle(
+                                subcommand === "real_names"
+                                    ? "Bulk Real-Name Assignment"
+                                    : "Bulk Nickname Update"
+                            )
                             .addFields(
                                 {
                                     name: "Action By",
@@ -2437,7 +2759,7 @@ client.on(
                                 {
                                     name: "Result",
                                     value:
-                                        `Matched: ${selectedMembers.length}\nChanged: ${changed}\nUnchanged: ${unchanged}\nSkipped: ${skipped}\nFailed: ${failed}`
+                                        `Matched: ${selectedMembers.length}\nChanged: ${changed}\nUnchanged: ${unchanged}\nSkipped: ${skipped}\nPool exhausted: ${poolExhausted}\nFailed: ${failed}`
                                 }
                             )
                             .setTimestamp();
@@ -2450,14 +2772,21 @@ client.on(
 
                         return interaction.editReply(
                             [
-                                "✅ **Bulk rename finished**",
+                                subcommand === "real_names"
+                                    ? "✅ **Bulk real-name assignment finished**"
+                                    : "✅ **Bulk rename finished**",
                                 `Selection: ${selectionLabel}`,
                                 `Matched: ${selectedMembers.length}`,
                                 `Changed: ${changed}`,
                                 `Already matching: ${unchanged}`,
-                                `Skipped (owner/higher role): ${skipped}`,
+                                subcommand === "real_names"
+                                    ? `Skipped (hierarchy/pool limit): ${skipped}`
+                                    : `Skipped (owner/higher role): ${skipped}`,
+                                subcommand === "real_names"
+                                    ? `Unique name pool used: ${realNameIndex}/${REAL_CUSTOM_NAMES.length}`
+                                    : null,
                                 `Failed: ${failed}`
-                            ].join("\n")
+                            ].filter(Boolean).join("\n")
                         );
                     }
 
@@ -2465,18 +2794,33 @@ client.on(
                         processed++;
 
                         if (
-                            !member.manageable ||
-                            member.id === interaction.guild.ownerId
+                            isRemoveRole &&
+                            member.id === client.user.id
                         ) {
                             skipped++;
-                        } else if (member.roles.cache.has(role.id)) {
+                        } else if (
+                            !isRemoveRole &&
+                            member.roles.cache.has(role.id)
+                        ) {
+                            unchanged++;
+                        } else if (
+                            isRemoveRole &&
+                            !member.roles.cache.has(role.id)
+                        ) {
                             unchanged++;
                         } else {
                             try {
-                                await member.roles.add(
-                                    role,
-                                    `Bulk role assignment by ${interaction.user.tag}`
-                                );
+                                if (isRemoveRole) {
+                                    await member.roles.remove(
+                                        role,
+                                        `Bulk role removal by ${interaction.user.tag}`
+                                    );
+                                } else {
+                                    await member.roles.add(
+                                        role,
+                                        `Bulk role assignment by ${interaction.user.tag}`
+                                    );
+                                }
                                 changed++;
                             } catch (error) {
                                 failed++;
@@ -2485,15 +2829,25 @@ client.on(
 
                         await updateBulkProgress(
                             interaction,
-                            "Bulk role assignment",
+                            isRemoveRole
+                                ? "Bulk role removal"
+                                : "Bulk role assignment",
                             processed,
                             selectedMembers.length
                         );
                     }
 
                     const log = new EmbedBuilder()
-                        .setColor("#57F287")
-                        .setTitle("Bulk Role Assignment")
+                        .setColor(
+                            isRemoveRole
+                                ? "#ED4245"
+                                : "#57F287"
+                        )
+                        .setTitle(
+                            isRemoveRole
+                                ? "Bulk Role Removal"
+                                : "Bulk Role Assignment"
+                        )
                         .addFields(
                             {
                                 name: "Action By",
@@ -2512,7 +2866,9 @@ client.on(
                             {
                                 name: "Result",
                                 value:
-                                    `Matched: ${selectedMembers.length}\nChanged: ${changed}\nAlready had role: ${unchanged}\nSkipped: ${skipped}\nFailed: ${failed}`
+                                    isRemoveRole
+                                        ? `Matched: ${selectedMembers.length}\nRemoved: ${changed}\nAlready absent: ${unchanged}\nSkipped: ${skipped}\nFailed: ${failed}`
+                                        : `Matched: ${selectedMembers.length}\nAdded: ${changed}\nAlready had role: ${unchanged}\nSkipped: ${skipped}\nFailed: ${failed}`
                             }
                         )
                         .setTimestamp();
@@ -2525,13 +2881,19 @@ client.on(
 
                     return interaction.editReply(
                         [
-                            "✅ **Bulk role assignment finished**",
+                            isRemoveRole
+                                ? "✅ **Bulk role removal finished**"
+                                : "✅ **Bulk role assignment finished**",
                             `Role: ${role.name}`,
                             `Selection: ${selectionLabel}`,
                             `Matched: ${selectedMembers.length}`,
-                            `Role given: ${changed}`,
-                            `Already had role: ${unchanged}`,
-                            `Skipped (owner/higher role): ${skipped}`,
+                            isRemoveRole
+                                ? `Role removed: ${changed}`
+                                : `Role given: ${changed}`,
+                            isRemoveRole
+                                ? `Already absent: ${unchanged}`
+                                : `Already had role: ${unchanged}`,
+                            `Skipped: ${skipped}`,
                             `Failed: ${failed}`
                         ].join("\n")
                     );
