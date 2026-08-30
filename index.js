@@ -147,6 +147,126 @@ function parseDuration(durationStr) {
         timeUnits[match[2].toLowerCase()];
 }
 
+// ================= BULK MEMBER HELPERS =================
+function parseBulkDate(dateString, utcOffsetHours = 0) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(
+        String(dateString || "").trim()
+    );
+
+    if (!match) return null;
+
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const rawStart = Date.UTC(year, month - 1, day);
+    const parsed = new Date(rawStart);
+
+    // Date.UTC normalizes invalid dates, so validate every part again.
+    if (
+        parsed.getUTCFullYear() !== year ||
+        parsed.getUTCMonth() !== month - 1 ||
+        parsed.getUTCDate() !== day
+    ) {
+        return null;
+    }
+
+    return {
+        start: rawStart - (utcOffsetHours * 3600000),
+        end: rawStart - (utcOffsetHours * 3600000) + 86400000 - 1
+    };
+}
+
+function formatBulkUtcOffset(utcOffsetHours) {
+    const sign = utcOffsetHours >= 0 ? "+" : "-";
+    const hours = String(Math.abs(utcOffsetHours)).padStart(2, "0");
+
+    return `UTC${sign}${hours}:00`;
+}
+
+function getMemberDateTimestamp(member, dateType) {
+    if (dateType === "created") {
+        return member.user.createdTimestamp;
+    }
+
+    return member.joinedTimestamp;
+}
+
+function matchesBulkDate(member, dateType, condition, dateWindow) {
+    const timestamp = getMemberDateTimestamp(member, dateType);
+
+    if (!timestamp) return false;
+
+    if (condition === "before") {
+        // Include the complete selected date and all earlier dates.
+        return timestamp <= dateWindow.end;
+    }
+
+    if (condition === "after") {
+        // Include the complete selected date and all later dates.
+        return timestamp >= dateWindow.start;
+    }
+
+    return (
+        timestamp >= dateWindow.start &&
+        timestamp <= dateWindow.end
+    );
+}
+
+function truncateDiscordNickname(value) {
+    return Array.from(String(value || ""))
+        .slice(0, 32)
+        .join("");
+}
+
+function buildBulkNickname(member, mode, text) {
+    const currentName =
+        member.nickname ||
+        member.user.globalName ||
+        member.user.username;
+
+    if (mode === "prefix") {
+        return truncateDiscordNickname(
+            `${text}${currentName}`
+        ).trim();
+    }
+
+    if (mode === "suffix") {
+        const suffix = truncateDiscordNickname(text);
+        const availableLength = Math.max(
+            0,
+            32 - Array.from(suffix).length
+        );
+        const shortenedName = Array.from(currentName)
+            .slice(0, availableLength)
+            .join("");
+
+        return truncateDiscordNickname(
+            `${shortenedName}${suffix}`
+        ).trim();
+    }
+
+    // Replace mode also supports a per-member template.
+    return truncateDiscordNickname(
+        String(text)
+            .replaceAll("{name}", currentName)
+            .replaceAll("{username}", member.user.username)
+            .replaceAll("{id}", member.id)
+    ).trim();
+}
+
+async function updateBulkProgress(
+    interaction,
+    action,
+    processed,
+    total
+) {
+    if (processed !== total && processed % 50 !== 0) return;
+
+    await interaction.editReply(
+        `⏳ ${action}: ${processed}/${total} members processed...`
+    ).catch(() => {});
+}
+
 // ================= GET TICKET CATEGORY =================
 async function getTicketCategory(guild, type) {
 
@@ -855,6 +975,152 @@ const commands = [
             o.setName("user")
                 .setDescription("User")
                 .setRequired(false)
+        ),
+
+    new SlashCommandBuilder()
+        .setName("bulk")
+        .setDescription("Bulk manage members selected by date")
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName("rename")
+                .setDescription("Bulk change nicknames for members selected by date")
+                .addStringOption(o =>
+                    o.setName("date")
+                        .setDescription("Date in YYYY-MM-DD format (UTC)")
+                        .setRequired(true)
+                )
+                .addStringOption(o =>
+                    o.setName("date_type")
+                        .setDescription("Which member date should be checked?")
+                        .setRequired(true)
+                        .addChoices(
+                            {
+                                name: "Server join date",
+                                value: "joined"
+                            },
+                            {
+                                name: "Discord account creation date",
+                                value: "created"
+                            }
+                        )
+                )
+                .addStringOption(o =>
+                    o.setName("condition")
+                        .setDescription("How the selected date should be matched")
+                        .setRequired(true)
+                        .addChoices(
+                            {
+                                name: "Only on this date",
+                                value: "on"
+                            },
+                            {
+                                name: "On or before this date",
+                                value: "before"
+                            },
+                            {
+                                name: "On or after this date",
+                                value: "after"
+                            }
+                        )
+                )
+                .addStringOption(o =>
+                    o.setName("mode")
+                        .setDescription("How the nickname should be changed")
+                        .setRequired(true)
+                        .addChoices(
+                            {
+                                name: "Add text before existing name",
+                                value: "prefix"
+                            },
+                            {
+                                name: "Add text after existing name",
+                                value: "suffix"
+                            },
+                            {
+                                name: "Replace name / use template",
+                                value: "replace"
+                            }
+                        )
+                )
+                .addStringOption(o =>
+                    o.setName("text")
+                        .setDescription("Text; templates: {name}, {username}, {id}")
+                        .setRequired(true)
+                        .setMaxLength(32)
+                )
+                .addIntegerOption(o =>
+                    o.setName("utc_offset")
+                        .setDescription("Timezone offset; use 5 for Pakistan (default 0)")
+                        .setMinValue(-12)
+                        .setMaxValue(14)
+                        .setRequired(false)
+                )
+                .addBooleanOption(o =>
+                    o.setName("preview")
+                        .setDescription("Count matching members without changing them")
+                        .setRequired(false)
+                )
+        )
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName("role")
+                .setDescription("Give a role to members selected by date")
+                .addRoleOption(o =>
+                    o.setName("role")
+                        .setDescription("Role to give")
+                        .setRequired(true)
+                )
+                .addStringOption(o =>
+                    o.setName("date")
+                        .setDescription("Date in YYYY-MM-DD format (UTC)")
+                        .setRequired(true)
+                )
+                .addStringOption(o =>
+                    o.setName("date_type")
+                        .setDescription("Which member date should be checked?")
+                        .setRequired(true)
+                        .addChoices(
+                            {
+                                name: "Server join date",
+                                value: "joined"
+                            },
+                            {
+                                name: "Discord account creation date",
+                                value: "created"
+                            }
+                        )
+                )
+                .addStringOption(o =>
+                    o.setName("condition")
+                        .setDescription("How the selected date should be matched")
+                        .setRequired(true)
+                        .addChoices(
+                            {
+                                name: "Only on this date",
+                                value: "on"
+                            },
+                            {
+                                name: "On or before this date",
+                                value: "before"
+                            },
+                            {
+                                name: "On or after this date",
+                                value: "after"
+                            }
+                        )
+                )
+                .addIntegerOption(o =>
+                    o.setName("utc_offset")
+                        .setDescription("Timezone offset; use 5 for Pakistan (default 0)")
+                        .setMinValue(-12)
+                        .setMaxValue(14)
+                        .setRequired(false)
+                )
+                .addBooleanOption(o =>
+                    o.setName("preview")
+                        .setDescription("Count matching members without changing them")
+                        .setRequired(false)
+                )
         ),
 
     new SlashCommandBuilder()
@@ -1908,6 +2174,367 @@ client.on(
                             embed
                         ]
                     });
+                }
+
+                // ================= BULK MEMBER MANAGEMENT =================
+
+                if (cmd === "bulk") {
+                    const subcommand =
+                        interaction.options.getSubcommand();
+                    const dateString =
+                        interaction.options.getString("date", true);
+                    const dateType =
+                        interaction.options.getString("date_type", true);
+                    const condition =
+                        interaction.options.getString("condition", true);
+                    const preview =
+                        interaction.options.getBoolean("preview") || false;
+                    const utcOffset =
+                        interaction.options.getInteger("utc_offset") ?? 0;
+                    const dateWindow =
+                        parseBulkDate(dateString, utcOffset);
+
+                    if (!dateWindow) {
+                        return interaction.reply({
+                            content:
+                                "❌ Invalid date. Use YYYY-MM-DD, for example 2026-08-30.",
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
+                    }
+
+                    const requiredPermission =
+                        subcommand === "rename"
+                            ? PermissionsBitField.Flags.ManageNicknames
+                            : PermissionsBitField.Flags.ManageRoles;
+
+                    if (
+                        !interaction.memberPermissions?.has(
+                            requiredPermission
+                        )
+                    ) {
+                        return interaction.reply({
+                            content:
+                                subcommand === "rename"
+                                    ? "❌ You need Manage Nicknames permission."
+                                    : "❌ You need Manage Roles permission.",
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
+                    }
+
+                    const botMember =
+                        interaction.guild.members.me;
+
+                    if (
+                        !botMember?.permissions.has(
+                            requiredPermission
+                        )
+                    ) {
+                        return interaction.reply({
+                            content:
+                                subcommand === "rename"
+                                    ? "❌ Give the bot Manage Nicknames permission first."
+                                    : "❌ Give the bot Manage Roles permission first.",
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
+                    }
+
+                    let role = null;
+
+                    if (subcommand === "role") {
+                        role =
+                            interaction.options.getRole("role", true);
+
+                        if (
+                            role.id === interaction.guild.id ||
+                            role.managed ||
+                            !role.editable
+                        ) {
+                            return interaction.reply({
+                                content:
+                                    "❌ I cannot assign this role. Move the bot role above it and do not select @everyone or an integration role.",
+                                flags:
+                                    MessageFlags.Ephemeral
+                            });
+                        }
+
+                        const requesterIsAdmin =
+                            interaction.memberPermissions.has(
+                                PermissionsBitField.Flags.Administrator
+                            );
+                        const requesterHighestRole =
+                            interaction.member.roles.highest;
+
+                        if (
+                            !requesterIsAdmin &&
+                            role.position >= requesterHighestRole.position
+                        ) {
+                            return interaction.reply({
+                                content:
+                                    "❌ You can only bulk-assign roles below your highest role.",
+                                flags:
+                                    MessageFlags.Ephemeral
+                            });
+                        }
+                    }
+
+                    await interaction.deferReply({
+                        flags:
+                            MessageFlags.Ephemeral
+                    });
+
+                    const members =
+                        await interaction.guild.members.fetch();
+                    const selectedMembers =
+                        Array.from(members.values()).filter(member =>
+                            !member.user.bot &&
+                            matchesBulkDate(
+                                member,
+                                dateType,
+                                condition,
+                                dateWindow
+                            )
+                        );
+
+                    const dateTypeLabel =
+                        dateType === "created"
+                            ? "account creation date"
+                            : "server join date";
+                    const conditionLabel =
+                        condition === "before"
+                            ? "on or before"
+                            : condition === "after"
+                                ? "on or after"
+                                : "on";
+                    const selectionLabel =
+                        `${dateTypeLabel} ${conditionLabel} ${dateString} (${formatBulkUtcOffset(utcOffset)})`;
+
+                    if (selectedMembers.length === 0) {
+                        return interaction.editReply(
+                            `ℹ️ No human members matched: ${selectionLabel}.`
+                        );
+                    }
+
+                    if (preview) {
+                        const manageable =
+                            selectedMembers.filter(member =>
+                                member.manageable &&
+                                member.id !== interaction.guild.ownerId
+                            );
+                        const alreadyHasRole =
+                            role
+                                ? manageable.filter(member =>
+                                    member.roles.cache.has(role.id)
+                                ).length
+                                : 0;
+
+                        return interaction.editReply(
+                            [
+                                "🔎 **Bulk preview only — no changes made**",
+                                `Selection: ${selectionLabel}`,
+                                `Matching human members: ${selectedMembers.length}`,
+                                `Manageable by bot: ${manageable.length}`,
+                                role
+                                    ? `Already have ${role.name}: ${alreadyHasRole}`
+                                    : "Run the command again with preview:false to rename them."
+                            ].join("\n")
+                        );
+                    }
+
+                    let changed = 0;
+                    let unchanged = 0;
+                    let skipped = 0;
+                    let failed = 0;
+                    let processed = 0;
+
+                    if (subcommand === "rename") {
+                        const mode =
+                            interaction.options.getString("mode", true);
+                        const text =
+                            interaction.options.getString("text", true);
+
+                        for (const member of selectedMembers) {
+                            processed++;
+
+                            if (
+                                !member.manageable ||
+                                member.id === interaction.guild.ownerId
+                            ) {
+                                skipped++;
+                                await updateBulkProgress(
+                                    interaction,
+                                    "Bulk rename",
+                                    processed,
+                                    selectedMembers.length
+                                );
+                                continue;
+                            }
+
+                            const currentName =
+                                member.nickname ||
+                                member.user.globalName ||
+                                member.user.username;
+
+                            if (
+                                (mode === "prefix" && currentName.startsWith(text)) ||
+                                (mode === "suffix" && currentName.endsWith(text))
+                            ) {
+                                unchanged++;
+                                await updateBulkProgress(
+                                    interaction,
+                                    "Bulk rename",
+                                    processed,
+                                    selectedMembers.length
+                                );
+                                continue;
+                            }
+
+                            const newNickname =
+                                buildBulkNickname(member, mode, text);
+
+                            if (!newNickname) {
+                                failed++;
+                            } else if (
+                                member.nickname === newNickname ||
+                                (!member.nickname && member.displayName === newNickname)
+                            ) {
+                                unchanged++;
+                            } else {
+                                try {
+                                    await member.setNickname(
+                                        newNickname,
+                                        `Bulk rename by ${interaction.user.tag}`
+                                    );
+                                    changed++;
+                                } catch (error) {
+                                    failed++;
+                                }
+                            }
+
+                            await updateBulkProgress(
+                                interaction,
+                                "Bulk rename",
+                                processed,
+                                selectedMembers.length
+                            );
+                        }
+
+                        const log = new EmbedBuilder()
+                            .setColor("#5865F2")
+                            .setTitle("Bulk Nickname Update")
+                            .addFields(
+                                {
+                                    name: "Action By",
+                                    value: interaction.user.tag,
+                                    inline: true
+                                },
+                                {
+                                    name: "Selection",
+                                    value: selectionLabel
+                                },
+                                {
+                                    name: "Result",
+                                    value:
+                                        `Matched: ${selectedMembers.length}\nChanged: ${changed}\nUnchanged: ${unchanged}\nSkipped: ${skipped}\nFailed: ${failed}`
+                                }
+                            )
+                            .setTimestamp();
+
+                        await sendLog(
+                            interaction.guild,
+                            LOG_CHANNELS.NICKNAME,
+                            log
+                        );
+
+                        return interaction.editReply(
+                            [
+                                "✅ **Bulk rename finished**",
+                                `Selection: ${selectionLabel}`,
+                                `Matched: ${selectedMembers.length}`,
+                                `Changed: ${changed}`,
+                                `Already matching: ${unchanged}`,
+                                `Skipped (owner/higher role): ${skipped}`,
+                                `Failed: ${failed}`
+                            ].join("\n")
+                        );
+                    }
+
+                    for (const member of selectedMembers) {
+                        processed++;
+
+                        if (
+                            !member.manageable ||
+                            member.id === interaction.guild.ownerId
+                        ) {
+                            skipped++;
+                        } else if (member.roles.cache.has(role.id)) {
+                            unchanged++;
+                        } else {
+                            try {
+                                await member.roles.add(
+                                    role,
+                                    `Bulk role assignment by ${interaction.user.tag}`
+                                );
+                                changed++;
+                            } catch (error) {
+                                failed++;
+                            }
+                        }
+
+                        await updateBulkProgress(
+                            interaction,
+                            "Bulk role assignment",
+                            processed,
+                            selectedMembers.length
+                        );
+                    }
+
+                    const log = new EmbedBuilder()
+                        .setColor("#57F287")
+                        .setTitle("Bulk Role Assignment")
+                        .addFields(
+                            {
+                                name: "Action By",
+                                value: interaction.user.tag,
+                                inline: true
+                            },
+                            {
+                                name: "Role",
+                                value: `${role.name} (${role.id})`,
+                                inline: true
+                            },
+                            {
+                                name: "Selection",
+                                value: selectionLabel
+                            },
+                            {
+                                name: "Result",
+                                value:
+                                    `Matched: ${selectedMembers.length}\nChanged: ${changed}\nAlready had role: ${unchanged}\nSkipped: ${skipped}\nFailed: ${failed}`
+                            }
+                        )
+                        .setTimestamp();
+
+                    await sendLog(
+                        interaction.guild,
+                        LOG_CHANNELS.ROLE,
+                        log
+                    );
+
+                    return interaction.editReply(
+                        [
+                            "✅ **Bulk role assignment finished**",
+                            `Role: ${role.name}`,
+                            `Selection: ${selectionLabel}`,
+                            `Matched: ${selectedMembers.length}`,
+                            `Role given: ${changed}`,
+                            `Already had role: ${unchanged}`,
+                            `Skipped (owner/higher role): ${skipped}`,
+                            `Failed: ${failed}`
+                        ].join("\n")
+                    );
                 }
 
                 // ================= GIVE ROLE =================
