@@ -20,6 +20,7 @@ const {
     MessageFlags
 } = require("discord.js");
 
+const { createCanvas, loadImage } = require("@napi-rs/canvas");
 
 // ================= CONFIG & ENV =================
 const TOKEN = process.env.TOKEN;
