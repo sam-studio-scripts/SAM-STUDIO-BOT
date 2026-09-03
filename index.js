@@ -24,25 +24,25 @@ const http = require("http");
 
 // ================= CONFIG & ENV =================
 const TOKEN = process.env.TOKEN;
-const CLIENT_ID = process.env.CLIENT_ID;
-const PANEL_CHANNEL_ID = "1525147897744720033";
-const STAFF_ROLE_ID = "1525147649723072663";
-const VERIFIED_ROLE_ID = "1359231814547275966";
-const WELCOME_CHANNEL_ID = process.env.WELCOME_CHANNEL;
-const GOODBYE_CHANNEL_ID = process.env.GOODBYE_CHANNEL;
-const CLOSED_CATEGORY_ID = "1525148029668163703";
+const CLIENT_ID = "1536547186962333777";
+const PANEL_CHANNEL_ID = "1526597563736916028";
+const STAFF_ROLE_ID = "686569170330058753";
+const VERIFIED_ROLE_ID = "1526597473970294914";
+const WELCOME_CHANNEL_ID = "1526597511228166267";
+const GOODBYE_CHANNEL_ID = "1536548597078691950";
+const CLOSED_CATEGORY_ID = "1544914321090543626";
 
 // Log Channels
 const LOG_CHANNELS = {
-    MOD: process.env.MOD_LOGS,
-    TICKET: process.env.TICKET_LOGS,
-    MSG: process.env.MESSAGE_LOGS,
-    VC: process.env.VC_LOGS,
+    MOD: "1536548714297032794",
+    TICKET: "1544912522874851448",
+    MSG: "1544912711664664586",
+    VC: "1544912908084056114",
     JOIN: process.env.JOIN_LEAVE_LOGS,
-    ROLE: process.env.ROLE_LOGS,
+    ROLE: "1544912807303192576",
     SERVER: process.env.SERVER_LOGS,
-    INVITE: process.env.INVITE_LOGS,
-    NICKNAME: process.env.NICKNAME_LOGS
+    INVITE: "1544913016426991726",
+    NICKNAME: "1544913108638629960"
 };
 
 // ================= TICKET CATEGORIES =================
@@ -50,9 +50,9 @@ const LOG_CHANNELS = {
 // name se find/create kar dega.
 
 const CATEGORY_IDS = {
-    pre_purchase: process.env.PRE_PURCHASE_CATEGORY_ID || null,
-    script_support: process.env.SCRIPT_SUPPORT_CATEGORY_ID || null,
-    partners: process.env.PARTNERS_CATEGORY_ID || null
+    pre_purchase: "1544913384695402496",
+    script_support: "1531650428322971769",
+    partners: "1544914210524241970"
 };
 
 const CATEGORY_NAMES = {
@@ -100,7 +100,7 @@ let invites = new Map();
 
 // ================= ANTI PING =================
 const ANTI_PING_MEMBERS = new Set();
-const ANTI_PING_ROLE_ID = "890136671050424340";
+const ANTI_PING_ROLE_ID = "1215053255416217612";
 const antiPingAttempts = new Map();
 
 // ================= CLIENT =================
