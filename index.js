@@ -4415,75 +4415,66 @@ client.on(
                 );
         }
 
-        // ================= WELCOME =================
+// ================= WELCOME =================
 
-        if (
+if (
+    WELCOME_CHANNEL_ID
+) {
+
+    const channel =
+        member.guild.channels.cache.get(
             WELCOME_CHANNEL_ID
-        ) {
+        );
 
-            const channel =
-                member.guild.channels.cache.get(
-                    WELCOME_CHANNEL_ID
+    if (channel) {
+
+        const embed =
+            new EmbedBuilder()
+
+                .setTitle(
+                    "Welcome to SAM STUDIO | 2026!"
+                )
+
+                .setColor(
+                    0xB92E24
+                )
+
+                .setDescription(
+                    `Hey ${member}, glad you found us!\nWe are happy to welcome you to SAM STUDIO.`
+                )
+
+                .setThumbnail(
+                    member.user.displayAvatarURL({
+                        extension: "png",
+                        size: 256
+                    })
+                )
+
+                .setImage(
+                    "https://cdn.discordapp.com/attachments/1533736092610859028/1544901362515452025/SAM_STUDIO.png?ex=6a9a3103&is=6a98df83&hm=51b702087b34c32ef8a138b3913894331b5c1a3011bad75d56a810225f9b516a&"
+                )
+
+                .setFooter({
+                    text:
+                        "SAM STUDIO | 2026"
+                })
+
+                .setTimestamp();
+
+        await channel.send({
+            embeds: [
+                embed
+            ]
+        }).catch(
+            error => {
+                console.error(
+                    "Welcome message error:",
+                    error
                 );
-
-            if (channel) {
-                try {
-                    const welcomeImage =
-                        await createWelcomeImage(
-                            member
-                        );
-
-                    const imageName =
-                        `welcome-${member.id}.png`;
-
-                    const attachment =
-                        new AttachmentBuilder(
-                            welcomeImage,
-                            {
-                                name: imageName
-                            }
-                        );
-
-                    const embed =
-                        new EmbedBuilder()
-
-                            .setTitle(
-                                "Welcome to SAM STUDIO | 2026!"
-                            )
-
-                            .setColor(
-                                0xB92E24
-                            )
-
-                            .setDescription(
-                                `Hey ${member}, glad you found us!\nWe are happy to welcome you to SAM STUDIO.`
-                            )
-
-                            .setImage(
-                            "https://cdn.discordapp.com/attachments/1533736092610859028/1544901362515452025/SAM_STUDIO.png?ex=6a9a3103&is=6a98df83&hm=51b702087b34c32ef8a138b3913894331b5c1a3011bad75d56a810225f9b516a&"
-                            )
-
-                            .setFooter({
-                                text:
-                                    "SAM STUDIO | 2026"
-                            })
-
-                            .setTimestamp();
-
-                    await channel.send({
-                        embeds: [
-                            embed
-                        ],
-                        files: [
-                            attachment
-                        ]
-                    });
-                } catch (error) {
-                    console.error(
-                        "Welcome image error:",
-                        error
-                    );
-
+            }
+        );
+    }
+}
                     // Fallback: a welcome message still sends if the image fails.
                     const fallbackEmbed =
                         new EmbedBuilder()
