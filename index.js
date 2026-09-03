@@ -4417,16 +4417,36 @@ client.on(
 
 // ================= WELCOME =================
 
-if (
-    WELCOME_CHANNEL_ID
-) {
+if (WELCOME_CHANNEL_ID) {
 
-    const channel =
-        member.guild.channels.cache.get(
-            WELCOME_CHANNEL_ID
-        );
+    try {
 
-    if (channel) {
+        const welcomeChannel =
+            await member.guild.channels.fetch(
+                WELCOME_CHANNEL_ID
+            );
+
+        const imageChannel =
+            await member.guild.channels.fetch(
+                "1533736092610859028"
+            );
+
+        const imageMessage =
+            await imageChannel.messages.fetch(
+                "1544888857131094057"
+            );
+
+        const imageAttachment =
+            imageMessage.attachments.find(
+                attachment =>
+                    attachment.contentType?.startsWith("image/")
+            ) || imageMessage.attachments.first();
+
+        if (!imageAttachment) {
+            throw new Error(
+                "Welcome image message mein picture nahi mili."
+            );
+        }
 
         const embed =
             new EmbedBuilder()
@@ -4451,7 +4471,7 @@ if (
                 )
 
                 .setImage(
-                    "https://cdn.discordapp.com/attachments/1533736092610859028/1544901362515452025/SAM_STUDIO.png?ex=6a9a3103&is=6a98df83&hm=51b702087b34c32ef8a138b3913894331b5c1a3011bad75d56a810225f9b516a&"
+                    imageAttachment.url
                 )
 
                 .setFooter({
@@ -4461,17 +4481,21 @@ if (
 
                 .setTimestamp();
 
-        await channel.send({
+        await welcomeChannel.send({
             embeds: [
                 embed
             ]
-        }).catch(
-            error => {
-                console.error(
-                    "Welcome message error:",
-                    error
-                );
-            }
+        });
+
+        console.log(
+            `[WELCOME] Message sent for ${member.user.tag}`
+        );
+
+    } catch (error) {
+
+        console.error(
+            "[WELCOME ERROR]",
+            error
         );
     }
 }
