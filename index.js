@@ -5,11 +5,11 @@ const {
     Partials,
     PermissionsBitField,
     EmbedBuilder,
-    AttachmentBuilder,
     ActionRowBuilder,
     ButtonBuilder,
     ButtonStyle,
     ChannelType,
+    StringSelectMenuBuilder,
     ModalBuilder,
     TextInputBuilder,
     TextInputStyle,
@@ -19,20 +19,18 @@ const {
     Events,
     MessageFlags
 } = require("discord.js");
-
+const fs = require("fs");
+const http = require("http");
 
 // ================= CONFIG & ENV =================
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
-const PANEL_CHANNEL_ID = "1526597563736916028";
-const STAFF_ROLE_ID = "1536565026075181128";
-const VERIFIED_ROLE_ID = "1526597473970294914";
+const PANEL_CHANNEL_ID = "1525147897744720033";
+const STAFF_ROLE_ID = "1525147649723072663";
+const VERIFIED_ROLE_ID = "1359231814547275966";
 const WELCOME_CHANNEL_ID = process.env.WELCOME_CHANNEL;
 const GOODBYE_CHANNEL_ID = process.env.GOODBYE_CHANNEL;
-const CLOSED_CATEGORY_ID = "1536545669270077460";
-const STORE_URL = "https://sam-studio.tebex.store/";
-const WELCOME_IMAGE_CHANNEL_ID = "1533736092610859028";
-const WELCOME_IMAGE_MESSAGE_ID = "1544888857131094057";
+const CLOSED_CATEGORY_ID = "1525148029668163703";
 
 // Log Channels
 const LOG_CHANNELS = {
@@ -52,81 +50,58 @@ const LOG_CHANNELS = {
 // name se find/create kar dega.
 
 const CATEGORY_IDS = {
-    purchase: process.env.PURCHASE_CATEGORY_ID || null,
-    general_support: process.env.GENERAL_SUPPORT_CATEGORY_ID || null,
-    premium_support: process.env.PREMIUM_SUPPORT_CATEGORY_ID || null,
-    purchase_mlo: process.env.PURCHASE_MLO_CATEGORY_ID || null,
-    purchase_ped: process.env.PURCHASE_PED_CATEGORY_ID || null
+    pre_purchase: process.env.PRE_PURCHASE_CATEGORY_ID || null,
+    script_support: process.env.SCRIPT_SUPPORT_CATEGORY_ID || null,
+    partners: process.env.PARTNERS_CATEGORY_ID || null
 };
 
 const CATEGORY_NAMES = {
-    purchase: "Purchase",
-    general_support: "General Support",
-    premium_support: "Premium Support",
-    purchase_mlo: "Purchase MLO",
-    purchase_ped: "Purchase Ped"
+    pre_purchase: "Pre-purchase Questions",
+    script_support: "Script Support",
+    partners: "Partners"
 };
 
 const TICKET_LABELS = {
-    purchase: "Purchase",
-    general_support: "General Support",
-    premium_support: "Premium Support",
-    purchase_mlo: "Purchase MLO",
-    purchase_ped: "Purchase Ped"
+    pre_purchase: "Pre-purchase Questions",
+    script_support: "Script Support",
+    partners: "Partners"
+};
+
+const TICKET_DESCRIPTIONS = {
+    pre_purchase:
+        "Need details before purchase? Our team is here to guide you anytime.",
+    script_support:
+        "Get script support, bug fixes, and guidance from our staff anytime.",
+    partners:
+        "Discover our trusted partners and amazing communities. Check out their projects and support them!"
 };
 
 // Emojis
 const EMOJIS = {
-    purchase: "🛒",
-    general_support: "🛠️",
-    premium_support: "💎",
-    purchase_mlo: "🏠",
-    purchase_ped: "🧍"
+    pre_purchase: "❓",
+    script_support: "🔧",
+    partners: "🌟"
 };
 
-// ================= TICKET IMAGES =================
-const SMALL_IMAGE =
-    "https://cdn.discordapp.com/attachments/1533736092610859028/1536546430334795837/C-_Users_WILAYA1_AppData_Local_Temp_Layer-1.png?ex=6a7bcbe0&is=6a7a7a60&hm=1bd59b2f732df993da14e7ff8ed333ca8225777dca7b8ea97c57c267dafdf5f2&";
-
-const TICKET_IMAGE =
-    "https://cdn.discordapp.com/attachments/1533736092610859028/1536546340245602455/ChatGPT_Image_Jul_22_2026_02_37_49_AM.png?ex=6a7bcbcb&is=6a7a7a4b&hm=f5720415b49b1b1aad26b1156bc4e3d5225d5fc32ee701b04eb6fdc55ad106e2&";
+const TICKET_PANEL_DESCRIPTION =
+    "1. Do not tag, ping, or DM unless requested.\n" +
+    "2. No hate speech, bullying, or discrimination of any kind.\n" +
+    "3. Select the correct category when opening tickets.\n" +
+    "4. No support for leaked, stolen, or resold scripts.\n\n" +
+    "**Select a category below to open a ticket.**";
 
 // ================= DATA STORES =================
 let warnings = {};
+let antiSpamChannels = new Set();
+let antiLinkChannels = new Set();
+let antiMentionChannels = new Set();
 let activeGiveaways = new Map();
 let invites = new Map();
-let ticketSequence = 0;
 
 // ================= ANTI PING =================
 const ANTI_PING_MEMBERS = new Set();
 const ANTI_PING_ROLE_ID = "890136671050424340";
 const antiPingAttempts = new Map();
-
-// ================= 1,000 REALISTIC CUSTOM NAMES =================
-// 50 first names x 20 surnames = exactly 1,000 unique full names.
-const REAL_FIRST_NAMES = [
-    "Adam", "Adrian", "Aiden", "Amir", "Andrew",
-    "Benjamin", "Caleb", "Daniel", "David", "Elias",
-    "Ethan", "Gabriel", "Hamza", "Henry", "Isaac",
-    "Jacob", "James", "Liam", "Lucas", "Mason",
-    "Noah", "Oliver", "Ryan", "Samuel", "William",
-    "Amelia", "Ava", "Charlotte", "Chloe", "Eleanor",
-    "Ella", "Emily", "Emma", "Evelyn", "Grace",
-    "Hannah", "Harper", "Isabella", "Layla", "Lily",
-    "Mia", "Nora", "Olivia", "Ruby", "Sarah",
-    "Sofia", "Victoria", "Violet", "Yasmin", "Zoe"
-];
-
-const REAL_LAST_NAMES = [
-    "Adams", "Anderson", "Baker", "Bennett", "Brooks",
-    "Carter", "Clark", "Collins", "Cooper", "Davis",
-    "Edwards", "Evans", "Foster", "Garcia", "Harris",
-    "Hughes", "Johnson", "Lewis", "Miller", "Parker"
-];
-
-const REAL_CUSTOM_NAMES = REAL_FIRST_NAMES.flatMap(firstName =>
-    REAL_LAST_NAMES.map(lastName => `${firstName} ${lastName}`)
-);
 
 // ================= CLIENT =================
 const client = new Client({
@@ -161,127 +136,6 @@ async function sendLog(guild, channelId, embed) {
     }
 }
 
-// ================= WELCOME IMAGE =================
-let welcomeBackgroundCache = null;
-
-async function getWelcomeBackground() {
-    if (welcomeBackgroundCache) {
-        return welcomeBackgroundCache;
-    }
-
-    const sourceChannel = await client.channels.fetch(
-        WELCOME_IMAGE_CHANNEL_ID
-    );
-
-    if (!sourceChannel || !sourceChannel.isTextBased()) {
-        throw new Error(
-            "Welcome image channel was not found or is not a text channel."
-        );
-    }
-
-    const sourceMessage = await sourceChannel.messages.fetch(
-        WELCOME_IMAGE_MESSAGE_ID
-    );
-
-    const imageAttachment =
-        sourceMessage.attachments.find(
-            attachment =>
-                attachment.contentType?.startsWith("image/")
-        ) || sourceMessage.attachments.first();
-
-    const embeddedImageUrl =
-        sourceMessage.embeds.find(
-            embed => embed.image?.url
-        )?.image?.url;
-
-    const backgroundUrl =
-        imageAttachment?.url || embeddedImageUrl;
-
-    if (!backgroundUrl) {
-        throw new Error(
-            "No image attachment was found in the welcome image message."
-        );
-    }
-
-    welcomeBackgroundCache = await loadImage(
-        backgroundUrl
-    );
-
-    return welcomeBackgroundCache;
-}
-
-async function createWelcomeImage(member) {
-    const background = await getWelcomeBackground();
-
-    const avatar = await loadImage(
-        member.user.displayAvatarURL({
-            extension: "png",
-            size: 512,
-            forceStatic: true
-        })
-    );
-
-    const canvas = createCanvas(
-        background.width,
-        background.height
-    );
-
-    const ctx = canvas.getContext("2d");
-
-    ctx.drawImage(
-        background,
-        0,
-        0,
-        canvas.width,
-        canvas.height
-    );
-
-    // Coordinates are based on the empty red circle in SAM STUDIO.png.
-    // Ratios keep the avatar correctly aligned if the banner is resized.
-    const centerX = canvas.width * 0.859;
-    const centerY = canvas.height * 0.505;
-    const radius = Math.min(
-        canvas.width,
-        canvas.height
-    ) * 0.276;
-
-    // Crop the avatar from the center so it fills the circle without stretching.
-    const cropSize = Math.min(
-        avatar.width,
-        avatar.height
-    );
-    const cropX = (avatar.width - cropSize) / 2;
-    const cropY = (avatar.height - cropSize) / 2;
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(
-        centerX,
-        centerY,
-        radius,
-        0,
-        Math.PI * 2
-    );
-    ctx.closePath();
-    ctx.clip();
-
-    ctx.drawImage(
-        avatar,
-        cropX,
-        cropY,
-        cropSize,
-        cropSize,
-        centerX - radius,
-        centerY - radius,
-        radius * 2,
-        radius * 2
-    );
-
-    ctx.restore();
-
-    return canvas.toBuffer("image/png");
-}
-
 // ================= TIME PARSER =================
 function parseDuration(durationStr) {
     const timeUnits = {
@@ -298,163 +152,10 @@ function parseDuration(durationStr) {
         timeUnits[match[2].toLowerCase()];
 }
 
-// ================= BULK MEMBER HELPERS =================
-function parseBulkDate(dateString, utcOffsetHours = 0) {
-    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(
-        String(dateString || "").trim()
-    );
-
-    if (!match) return null;
-
-    const year = Number(match[1]);
-    const month = Number(match[2]);
-    const day = Number(match[3]);
-    const rawStart = Date.UTC(year, month - 1, day);
-    const parsed = new Date(rawStart);
-
-    // Date.UTC normalizes invalid dates, so validate every part again.
-    if (
-        parsed.getUTCFullYear() !== year ||
-        parsed.getUTCMonth() !== month - 1 ||
-        parsed.getUTCDate() !== day
-    ) {
-        return null;
-    }
-
-    return {
-        start: rawStart - (utcOffsetHours * 3600000),
-        end: rawStart - (utcOffsetHours * 3600000) + 86400000 - 1
-    };
-}
-
-function formatBulkUtcOffset(utcOffsetHours) {
-    const sign = utcOffsetHours >= 0 ? "+" : "-";
-    const hours = String(Math.abs(utcOffsetHours)).padStart(2, "0");
-
-    return `UTC${sign}${hours}:00`;
-}
-
-function getMemberDateTimestamp(member, dateType) {
-    if (dateType === "created") {
-        return member.user.createdTimestamp;
-    }
-
-    return member.joinedTimestamp;
-}
-
-function matchesBulkDate(member, dateType, condition, dateWindow) {
-    const timestamp = getMemberDateTimestamp(member, dateType);
-
-    if (!timestamp) return false;
-
-    if (condition === "before") {
-        // Include the complete selected date and all earlier dates.
-        return timestamp <= dateWindow.end;
-    }
-
-    if (condition === "after") {
-        // Include the complete selected date and all later dates.
-        return timestamp >= dateWindow.start;
-    }
-
-    return (
-        timestamp >= dateWindow.start &&
-        timestamp <= dateWindow.end
-    );
-}
-
-function matchesBulkTarget(member, targetType) {
-    if (targetType === "bots") {
-        return member.user.bot;
-    }
-
-    if (targetType === "all") {
-        return true;
-    }
-
-    return !member.user.bot;
-}
-
-function getBulkTargetLabel(targetType) {
-    if (targetType === "bots") return "bot members";
-    if (targetType === "all") return "all members";
-
-    return "human members";
-}
-
-function getShuffledRealNames() {
-    const names = [...REAL_CUSTOM_NAMES];
-
-    for (let index = names.length - 1; index > 0; index--) {
-        const randomIndex = Math.floor(Math.random() * (index + 1));
-        [names[index], names[randomIndex]] = [
-            names[randomIndex],
-            names[index]
-        ];
-    }
-
-    return names;
-}
-
-function truncateDiscordNickname(value) {
-    return Array.from(String(value || ""))
-        .slice(0, 32)
-        .join("");
-}
-
-function buildBulkNickname(member, mode, text) {
-    const currentName =
-        member.nickname ||
-        member.user.globalName ||
-        member.user.username;
-
-    if (mode === "prefix") {
-        return truncateDiscordNickname(
-            `${text}${currentName}`
-        ).trim();
-    }
-
-    if (mode === "suffix") {
-        const suffix = truncateDiscordNickname(text);
-        const availableLength = Math.max(
-            0,
-            32 - Array.from(suffix).length
-        );
-        const shortenedName = Array.from(currentName)
-            .slice(0, availableLength)
-            .join("");
-
-        return truncateDiscordNickname(
-            `${shortenedName}${suffix}`
-        ).trim();
-    }
-
-    // Replace mode also supports a per-member template.
-    return truncateDiscordNickname(
-        String(text)
-            .replaceAll("{name}", currentName)
-            .replaceAll("{username}", member.user.username)
-            .replaceAll("{id}", member.id)
-    ).trim();
-}
-
-async function updateBulkProgress(
-    interaction,
-    action,
-    processed,
-    total
-) {
-    if (processed !== total && processed % 50 !== 0) return;
-
-    await interaction.editReply(
-        `⏳ ${action}: ${processed}/${total} members processed...`
-    ).catch(() => {});
-}
-
 // ================= GET TICKET CATEGORY =================
 async function getTicketCategory(guild, type) {
 
-    const fallbackType = "general_support";
+    const fallbackType = "script_support";
 
     const safeType =
         CATEGORY_NAMES[type]
@@ -580,484 +281,6 @@ async function getTicketCreator(channel) {
     return null;
 }
 
-
-// =====================================================
-// PREMIUM TICKET HELPERS
-// =====================================================
-
-const TICKET_STATUS = {
-    waiting_staff: {
-        label: "🟡 Waiting for Staff",
-        prefix: "wait"
-    },
-    in_progress: {
-        label: "🔵 In Progress",
-        prefix: "work"
-    },
-    waiting_customer: {
-        label: "🟠 Waiting for Customer",
-        prefix: "customer"
-    },
-    solved: {
-        label: "🟢 Solved",
-        prefix: "solved"
-    },
-    closed: {
-        label: "🔒 Closed",
-        prefix: "closed"
-    }
-};
-
-const TICKET_TYPE_SLUG = {
-    purchase: "purchase",
-    general_support: "support",
-    premium_support: "premium",
-    purchase_mlo: "mlo",
-    purchase_ped: "ped"
-};
-
-function cleanChannelName(value) {
-    return String(value || "user")
-        .toLowerCase()
-        .replace(/[^a-z0-9-_]/g, "-")
-        .replace(/-+/g, "-")
-        .replace(/^-|-$/g, "")
-        .slice(0, 30) || "user";
-}
-
-function getTicketMeta(channel) {
-    const topic = channel?.topic || "";
-
-    const read = (key) => {
-        const match = topic.match(new RegExp(`${key}:([^|]+)`));
-        return match?.[1] || null;
-    };
-
-    return {
-        type: read("sam-ticket-type") || "general_support",
-        userId: read("sam-ticket-user"),
-        ticketId: read("sam-ticket-id") || String(channel?.id || "0000").slice(-4),
-        status: read("sam-ticket-status") || "waiting_staff",
-        claimedBy: read("sam-ticket-claimed") || "none"
-    };
-}
-
-async function updateTicketMeta(channel, patch = {}) {
-    const current = getTicketMeta(channel);
-    const next = {
-        ...current,
-        ...patch
-    };
-
-    const topic = [
-        `sam-ticket-type:${next.type}`,
-        `sam-ticket-user:${next.userId || "unknown"}`,
-        `sam-ticket-id:${next.ticketId}`,
-        `sam-ticket-status:${next.status}`,
-        `sam-ticket-claimed:${next.claimedBy || "none"}`
-    ].join("|");
-
-    await channel.setTopic(topic).catch(() => {});
-    return next;
-}
-
-function getNextTicketId() {
-    ticketSequence += 1;
-    return String(ticketSequence).padStart(4, "0");
-}
-
-async function getTicketOpener(channel, meta = getTicketMeta(channel)) {
-    if (meta.userId && meta.userId !== "unknown") {
-        const member = await channel.guild.members.fetch(meta.userId).catch(() => null);
-        if (member) return member;
-    }
-
-    return getTicketCreator(channel);
-}
-
-async function renameTicketChannel(channel, meta) {
-    const opener = await getTicketOpener(channel, meta);
-    const username = cleanChannelName(opener?.user?.username || meta.userId || "user");
-    const statusPrefix = TICKET_STATUS[meta.status]?.prefix || "wait";
-    const typeSlug = TICKET_TYPE_SLUG[meta.type] || "ticket";
-    const newName = `${statusPrefix}-${meta.ticketId}-${typeSlug}-${username}`.slice(0, 100);
-
-    if (channel.name !== newName) {
-        await channel.setName(newName).catch(() => {});
-    }
-}
-
-function buildTicketModal(type) {
-    const label = TICKET_LABELS[type] || "Support";
-    const modal = new ModalBuilder()
-        .setCustomId(`modal_${type}`)
-        .setTitle(`${EMOJIS[type] || "🎫"} ${label} Form`);
-
-    if (type === "purchase") {
-        modal.addComponents(
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder()
-                    .setCustomId("product_name")
-                    .setLabel("Script / Product Name")
-                    .setPlaceholder("Example: SAM Admin / Custom Script / Bundle")
-                    .setStyle(TextInputStyle.Short)
-                    .setRequired(true)
-            ),
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder()
-                    .setCustomId("purchase_details")
-                    .setLabel("What do you need?")
-                    .setPlaceholder("Tell us what you want to purchase or customize...")
-                    .setStyle(TextInputStyle.Paragraph)
-                    .setRequired(true)
-            )
-        );
-    } else if (type === "general_support") {
-        modal.addComponents(
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder()
-                    .setCustomId("help")
-                    .setLabel("How can we help?")
-                    .setPlaceholder("Explain your issue in detail...")
-                    .setStyle(TextInputStyle.Paragraph)
-                    .setRequired(true)
-            )
-        );
-    } else if (type === "premium_support") {
-        modal.addComponents(
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder()
-                    .setCustomId("script_name")
-                    .setLabel("Script Name")
-                    .setPlaceholder("Example: SAM Admin / SAM Ped Menu")
-                    .setStyle(TextInputStyle.Short)
-                    .setRequired(true)
-            ),
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder()
-                    .setCustomId("order_id")
-                    .setLabel("Order ID (Optional)")
-                    .setPlaceholder("Tebex/order ID if available")
-                    .setStyle(TextInputStyle.Short)
-                    .setRequired(false)
-            ),
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder()
-                    .setCustomId("issue")
-                    .setLabel("Issue / Error")
-                    .setPlaceholder("Paste the error and explain what is happening...")
-                    .setStyle(TextInputStyle.Paragraph)
-                    .setRequired(true)
-            )
-        );
-    } else if (type === "purchase_mlo") {
-        modal.addComponents(
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder()
-                    .setCustomId("mlo_name")
-                    .setLabel("MLO Name / Type")
-                    .setPlaceholder("Example: Valentine Saloon / Custom House")
-                    .setStyle(TextInputStyle.Short)
-                    .setRequired(true)
-            ),
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder()
-                    .setCustomId("mlo_requirements")
-                    .setLabel("MLO Requirements / Details")
-                    .setPlaceholder("Describe the MLO you want...")
-                    .setStyle(TextInputStyle.Paragraph)
-                    .setRequired(true)
-            ),
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder()
-                    .setCustomId("mlo_reference")
-                    .setLabel("MLO Reference / Link (Optional)")
-                    .setPlaceholder("Paste reference link if available")
-                    .setStyle(TextInputStyle.Short)
-                    .setRequired(false)
-            )
-        );
-    } else if (type === "purchase_ped") {
-        modal.addComponents(
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder()
-                    .setCustomId("ped_name")
-                    .setLabel("Ped Name / Type")
-                    .setPlaceholder("Example: Male Custom Ped / Female Ped")
-                    .setStyle(TextInputStyle.Short)
-                    .setRequired(true)
-            ),
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder()
-                    .setCustomId("ped_requirements")
-                    .setLabel("Ped Requirements / Details")
-                    .setPlaceholder("Describe clothes, face, style, etc...")
-                    .setStyle(TextInputStyle.Paragraph)
-                    .setRequired(true)
-            ),
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder()
-                    .setCustomId("ped_reference")
-                    .setLabel("Ped Reference / Link (Optional)")
-                    .setPlaceholder("Paste image/reference link if available")
-                    .setStyle(TextInputStyle.Short)
-                    .setRequired(false)
-            )
-        );
-    }
-
-    return modal;
-}
-
-function buildTicketControls(meta) {
-    const claimed = meta.claimedBy && meta.claimedBy !== "none";
-
-    const claimRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-            .setCustomId("ticket_claim")
-            .setLabel(claimed ? "Claimed" : "Claim")
-            .setEmoji("🙋")
-            .setStyle(ButtonStyle.Primary)
-            .setDisabled(claimed),
-        new ButtonBuilder()
-            .setCustomId("ticket_unclaim")
-            .setLabel("Unclaim")
-            .setEmoji("↩️")
-            .setStyle(ButtonStyle.Secondary)
-            .setDisabled(!claimed),
-        new ButtonBuilder()
-            .setCustomId("ticket_close")
-            .setLabel("Close")
-            .setEmoji("🔒")
-            .setStyle(ButtonStyle.Danger)
-    );
-
-    const statusRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-            .setCustomId("ticket_status_waiting_staff")
-            .setLabel("Waiting Staff")
-            .setEmoji("🟡")
-            .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-            .setCustomId("ticket_status_in_progress")
-            .setLabel("In Progress")
-            .setEmoji("🔵")
-            .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-            .setCustomId("ticket_status_waiting_customer")
-            .setLabel("Waiting Customer")
-            .setEmoji("🟠")
-            .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-            .setCustomId("ticket_solved")
-            .setLabel("Solved")
-            .setEmoji("✅")
-            .setStyle(ButtonStyle.Success)
-    );
-
-    return [claimRow, statusRow];
-}
-
-function buildClosedControls() {
-    return [
-        new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-                .setCustomId("ticket_reopen")
-                .setLabel("Reopen")
-                .setEmoji("🔓")
-                .setStyle(ButtonStyle.Success),
-            new ButtonBuilder()
-                .setCustomId("ticket_delete")
-                .setLabel("Delete")
-                .setEmoji("🗑️")
-                .setStyle(ButtonStyle.Danger)
-        )
-    ];
-}
-
-async function fetchAllTicketMessages(channel) {
-    const all = [];
-    let before = null;
-
-    while (true) {
-        const batch = await channel.messages.fetch({
-            limit: 100,
-            ...(before ? { before } : {})
-        });
-
-        if (!batch.size) break;
-
-        all.push(...batch.values());
-        before = batch.last().id;
-
-        if (batch.size < 100 || all.length >= 2000) break;
-    }
-
-    return all.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-}
-
-function makeTranscript(channel, messages, meta) {
-    const lines = [
-        "SAM STUDIO Ticket Transcript",
-        `Ticket ID: #${meta.ticketId}`,
-        `Type: ${TICKET_LABELS[meta.type] || meta.type}`,
-        `Opener ID: ${meta.userId || "Unknown"}`,
-        `Claimed By: ${meta.claimedBy && meta.claimedBy !== "none" ? meta.claimedBy : "Not Claimed"}`,
-        `Status: ${TICKET_STATUS[meta.status]?.label || meta.status}`,
-        `Channel: ${channel.name}`,
-        `Generated: ${new Date().toLocaleString()}`,
-        ""
-    ];
-
-    for (const message of messages) {
-        const author = message.author?.tag || "Unknown User";
-        const content = message.content || "[No text content]";
-        const attachmentLinks = [...message.attachments.values()]
-            .map(a => a.url)
-            .join(" ");
-
-        lines.push(
-            `[${message.createdAt.toLocaleString()}] ${author}: ${content}${attachmentLinks ? ` | Attachments: ${attachmentLinks}` : ""}`
-        );
-    }
-
-    return Buffer.from(lines.join("\n"), "utf-8");
-}
-
-async function refreshTicketControlMessage(channel, meta) {
-    const messages = await channel.messages.fetch({ limit: 50 }).catch(() => null);
-    if (!messages) return;
-
-    const controlMessage = messages.find(msg =>
-        msg.author?.id === client.user.id &&
-        msg.components.some(row =>
-            row.components.some(component => component.customId === "ticket_claim")
-        )
-    );
-
-    if (!controlMessage) return;
-
-    const existingEmbed = controlMessage.embeds[0]
-        ? EmbedBuilder.from(controlMessage.embeds[0])
-        : new EmbedBuilder().setTitle("SAM STUDIO Ticket");
-
-    const existingFields = (existingEmbed.data.fields || []).filter(field =>
-        !["Status", "Claimed By"].includes(field.name)
-    );
-
-    existingEmbed.setFields(
-        ...existingFields,
-        {
-            name: "Status",
-            value: TICKET_STATUS[meta.status]?.label || meta.status,
-            inline: true
-        },
-        {
-            name: "Claimed By",
-            value: meta.claimedBy && meta.claimedBy !== "none"
-                ? `<@${meta.claimedBy}>`
-                : "Not Claimed",
-            inline: true
-        }
-    );
-
-    await controlMessage.edit({
-        embeds: [existingEmbed],
-        components: buildTicketControls(meta)
-    }).catch(() => {});
-}
-
-async function sendRatingRequest(member, guildId, ticketId) {
-    if (!member) return;
-
-    const ratingRow = new ActionRowBuilder().addComponents(
-        ...[1, 2, 3, 4, 5].map(score =>
-            new ButtonBuilder()
-                .setCustomId(`ticket_rate:${guildId}:${ticketId}:${score}`)
-                .setLabel(`${score}★`)
-                .setStyle(score >= 4 ? ButtonStyle.Success : ButtonStyle.Secondary)
-        )
-    );
-
-    await member.send({
-        content: `⭐ **SAM STUDIO Support Rating**\nHow was the support for ticket **#${ticketId}**?`,
-        components: [ratingRow]
-    }).catch(() => {});
-}
-
-async function closeTicket(interaction) {
-    if (!interaction.deferred && !interaction.replied) {
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    }
-
-    const channel = interaction.channel;
-    let meta = getTicketMeta(channel);
-    const opener = await getTicketOpener(channel, meta);
-
-    const messages = await fetchAllTicketMessages(channel).catch(() => []);
-    const transcript = makeTranscript(channel, messages, meta);
-
-    if (opener) {
-        await opener.send({
-            content: `📄 **Your SAM STUDIO Ticket Transcript** — Ticket #${meta.ticketId}`,
-            files: [
-                {
-                    attachment: transcript,
-                    name: `transcript-${meta.ticketId}.txt`
-                }
-            ]
-        }).catch(() => {});
-    }
-
-    meta = await updateTicketMeta(channel, {
-        status: "closed"
-    });
-
-    await channel.setParent(CLOSED_CATEGORY_ID).catch(() => {});
-
-    if (meta.userId && meta.userId !== "unknown") {
-        await channel.permissionOverwrites.edit(meta.userId, {
-            ViewChannel: true,
-            SendMessages: false,
-            ReadMessageHistory: true
-        }).catch(() => {});
-    }
-
-    await renameTicketChannel(channel, meta);
-
-    if (interaction.message) {
-        await interaction.message.edit({ components: [] }).catch(() => {});
-    }
-
-    const closedEmbed = new EmbedBuilder()
-        .setColor("#E74C3C")
-        .setTitle(`🔒 Ticket #${meta.ticketId} Closed`)
-        .setDescription(`Closed by <@${interaction.user.id}>.\nThe opener can still read this channel but cannot send messages.`)
-        .setTimestamp();
-
-    await channel.send({
-        embeds: [closedEmbed],
-        components: buildClosedControls()
-    }).catch(() => {});
-
-    const log = new EmbedBuilder()
-        .setColor("#E74C3C")
-        .setTitle("Ticket Closed")
-        .addFields(
-            { name: "Ticket", value: `#${meta.ticketId}`, inline: true },
-            { name: "Channel", value: channel.name, inline: true },
-            { name: "Closed By", value: interaction.user.tag, inline: true }
-        )
-        .setTimestamp();
-
-    await sendLog(interaction.guild, LOG_CHANNELS.TICKET, log);
-    await sendRatingRequest(opener, interaction.guild.id, meta.ticketId);
-
-    if (interaction.deferred) {
-        return interaction.editReply("✅ Ticket closed. Transcript sent to the opener if DMs are available.");
-    }
-}
-
 // =====================================================
 // SLASH COMMANDS
 // =====================================================
@@ -1159,345 +382,6 @@ const commands = [
             o.setName("user")
                 .setDescription("User")
                 .setRequired(false)
-        ),
-
-    new SlashCommandBuilder()
-        .setName("bulk")
-        .setDescription("Bulk manage members selected by date")
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName("rename")
-                .setDescription("Add text to or replace existing nicknames")
-                .addStringOption(o =>
-                    o.setName("date")
-                        .setDescription("Date in YYYY-MM-DD format")
-                        .setRequired(true)
-                )
-                .addStringOption(o =>
-                    o.setName("date_type")
-                        .setDescription("Which member date should be checked?")
-                        .setRequired(true)
-                        .addChoices(
-                            {
-                                name: "Server join date",
-                                value: "joined"
-                            },
-                            {
-                                name: "Discord account creation date",
-                                value: "created"
-                            }
-                        )
-                )
-                .addStringOption(o =>
-                    o.setName("condition")
-                        .setDescription("How the selected date should be matched")
-                        .setRequired(true)
-                        .addChoices(
-                            {
-                                name: "Only on this date",
-                                value: "on"
-                            },
-                            {
-                                name: "On or before this date",
-                                value: "before"
-                            },
-                            {
-                                name: "On or after this date",
-                                value: "after"
-                            }
-                        )
-                )
-                .addStringOption(o =>
-                    o.setName("target_type")
-                        .setDescription("Which type of members should be renamed?")
-                        .setRequired(true)
-                        .addChoices(
-                            {
-                                name: "Human members only",
-                                value: "humans"
-                            },
-                            {
-                                name: "Bot members only",
-                                value: "bots"
-                            },
-                            {
-                                name: "All human and bot members",
-                                value: "all"
-                            }
-                        )
-                )
-                .addStringOption(o =>
-                    o.setName("mode")
-                        .setDescription("How the nickname should be changed")
-                        .setRequired(true)
-                        .addChoices(
-                            {
-                                name: "Add text before existing name",
-                                value: "prefix"
-                            },
-                            {
-                                name: "Add text after existing name",
-                                value: "suffix"
-                            },
-                            {
-                                name: "Replace name / use template",
-                                value: "replace"
-                            }
-                        )
-                )
-                .addStringOption(o =>
-                    o.setName("text")
-                        .setDescription("Text; templates: {name}, {username}, {id}")
-                        .setRequired(true)
-                        .setMaxLength(32)
-                )
-                .addIntegerOption(o =>
-                    o.setName("utc_offset")
-                        .setDescription("Timezone offset; use 5 for Pakistan (default 0)")
-                        .setMinValue(-12)
-                        .setMaxValue(14)
-                        .setRequired(false)
-                )
-                .addBooleanOption(o =>
-                    o.setName("preview")
-                        .setDescription("Count matching members without changing them")
-                        .setRequired(false)
-                )
-        )
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName("role")
-                .setDescription("Give a role to members selected by date")
-                .addRoleOption(o =>
-                    o.setName("role")
-                        .setDescription("Role to give")
-                        .setRequired(true)
-                )
-                .addStringOption(o =>
-                    o.setName("date")
-                        .setDescription("Date in YYYY-MM-DD format")
-                        .setRequired(true)
-                )
-                .addStringOption(o =>
-                    o.setName("date_type")
-                        .setDescription("Which member date should be checked?")
-                        .setRequired(true)
-                        .addChoices(
-                            {
-                                name: "Server join date",
-                                value: "joined"
-                            },
-                            {
-                                name: "Discord account creation date",
-                                value: "created"
-                            }
-                        )
-                )
-                .addStringOption(o =>
-                    o.setName("condition")
-                        .setDescription("How the selected date should be matched")
-                        .setRequired(true)
-                        .addChoices(
-                            {
-                                name: "Only on this date",
-                                value: "on"
-                            },
-                            {
-                                name: "On or before this date",
-                                value: "before"
-                            },
-                            {
-                                name: "On or after this date",
-                                value: "after"
-                            }
-                        )
-                )
-                .addStringOption(o =>
-                    o.setName("target_type")
-                        .setDescription("Which type of members should receive the role?")
-                        .setRequired(true)
-                        .addChoices(
-                            {
-                                name: "Human members only",
-                                value: "humans"
-                            },
-                            {
-                                name: "Bot members only",
-                                value: "bots"
-                            },
-                            {
-                                name: "All human and bot members",
-                                value: "all"
-                            }
-                        )
-                )
-                .addIntegerOption(o =>
-                    o.setName("utc_offset")
-                        .setDescription("Timezone offset; use 5 for Pakistan (default 0)")
-                        .setMinValue(-12)
-                        .setMaxValue(14)
-                        .setRequired(false)
-                )
-                .addBooleanOption(o =>
-                    o.setName("preview")
-                        .setDescription("Count matching members without changing them")
-                        .setRequired(false)
-                )
-        )
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName("remove_role")
-                .setDescription("Remove a role from members selected by date")
-                .addRoleOption(o =>
-                    o.setName("role")
-                        .setDescription("Role to remove")
-                        .setRequired(true)
-                )
-                .addStringOption(o =>
-                    o.setName("date")
-                        .setDescription("Date in YYYY-MM-DD format")
-                        .setRequired(true)
-                )
-                .addStringOption(o =>
-                    o.setName("date_type")
-                        .setDescription("Which member date should be checked?")
-                        .setRequired(true)
-                        .addChoices(
-                            {
-                                name: "Server join date",
-                                value: "joined"
-                            },
-                            {
-                                name: "Discord account creation date",
-                                value: "created"
-                            }
-                        )
-                )
-                .addStringOption(o =>
-                    o.setName("condition")
-                        .setDescription("How the selected date should be matched")
-                        .setRequired(true)
-                        .addChoices(
-                            {
-                                name: "Only on this date",
-                                value: "on"
-                            },
-                            {
-                                name: "On or before this date",
-                                value: "before"
-                            },
-                            {
-                                name: "On or after this date",
-                                value: "after"
-                            }
-                        )
-                )
-                .addStringOption(o =>
-                    o.setName("target_type")
-                        .setDescription("Which type of members should lose the role?")
-                        .setRequired(true)
-                        .addChoices(
-                            {
-                                name: "Human members only",
-                                value: "humans"
-                            },
-                            {
-                                name: "Bot members only",
-                                value: "bots"
-                            },
-                            {
-                                name: "All human and bot members",
-                                value: "all"
-                            }
-                        )
-                )
-                .addIntegerOption(o =>
-                    o.setName("utc_offset")
-                        .setDescription("Timezone offset; use 5 for Pakistan (default 0)")
-                        .setMinValue(-12)
-                        .setMaxValue(14)
-                        .setRequired(false)
-                )
-                .addBooleanOption(o =>
-                    o.setName("preview")
-                        .setDescription("Count matching members without changing them")
-                        .setRequired(false)
-                )
-        )
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName("real_names")
-                .setDescription("Assign unique names from 1,000 realistic names")
-                .addStringOption(o =>
-                    o.setName("date")
-                        .setDescription("Date in YYYY-MM-DD format")
-                        .setRequired(true)
-                )
-                .addStringOption(o =>
-                    o.setName("date_type")
-                        .setDescription("Which member date should be checked?")
-                        .setRequired(true)
-                        .addChoices(
-                            {
-                                name: "Server join date",
-                                value: "joined"
-                            },
-                            {
-                                name: "Discord account creation date",
-                                value: "created"
-                            }
-                        )
-                )
-                .addStringOption(o =>
-                    o.setName("condition")
-                        .setDescription("How the selected date should be matched")
-                        .setRequired(true)
-                        .addChoices(
-                            {
-                                name: "Only on this date",
-                                value: "on"
-                            },
-                            {
-                                name: "On or before this date",
-                                value: "before"
-                            },
-                            {
-                                name: "On or after this date",
-                                value: "after"
-                            }
-                        )
-                )
-                .addStringOption(o =>
-                    o.setName("target_type")
-                        .setDescription("Which type of members should receive real names?")
-                        .setRequired(true)
-                        .addChoices(
-                            {
-                                name: "Human members only",
-                                value: "humans"
-                            },
-                            {
-                                name: "Bot members only",
-                                value: "bots"
-                            },
-                            {
-                                name: "All human and bot members",
-                                value: "all"
-                            }
-                        )
-                )
-                .addIntegerOption(o =>
-                    o.setName("utc_offset")
-                        .setDescription("Timezone offset; use 5 for Pakistan (default 0)")
-                        .setMinValue(-12)
-                        .setMaxValue(14)
-                        .setRequired(false)
-                )
-                .addBooleanOption(o =>
-                    o.setName("preview")
-                        .setDescription("Count matching members without changing them")
-                        .setRequired(false)
-                )
         ),
 
     new SlashCommandBuilder()
@@ -1604,28 +488,10 @@ client.once(
                 "Slash Commands Registered ✅"
             );
 
-            console.log(
-                `Registered Commands: ${commands
-                    .map(command => `/${command.name}`)
-                    .join(", ")}`
-            );
-
         } catch (err) {
 
             console.error(err);
         }
-
-        // Initialize next ticket number from existing ticket topics
-        client.guilds.cache.forEach(guild => {
-            guild.channels.cache.forEach(channel => {
-                const match = channel.topic?.match(/sam-ticket-id:(\d+)/);
-                if (match) {
-                    ticketSequence = Math.max(ticketSequence, Number(match[1]) || 0);
-                }
-            });
-        });
-
-        console.log(`Ticket Counter Ready: next ticket will be #${String(ticketSequence + 1).padStart(4, "0")}`);
 
         // Invite tracker setup
 
@@ -1772,103 +638,115 @@ client.on(
                 }
 
                 // =================================================
-                // TICKET PANEL - BUTTON SYSTEM
+                // TICKET PANEL
                 // =================================================
 
                 if (cmd === "ticketpanel") {
 
-                    if (interaction.channelId !== PANEL_CHANNEL_ID) {
+                    if (
+                        interaction.channelId !==
+                        PANEL_CHANNEL_ID
+                    ) {
+
                         return interaction.reply({
-                            content: "Wrong channel ♻️",
-                            flags: MessageFlags.Ephemeral
+                            content:
+                                "Wrong channel ♻️",
+                            flags:
+                                MessageFlags.Ephemeral
                         });
                     }
 
-                    const embed = new EmbedBuilder()
-                        .setTitle("SAM STUDIO • RedM Support")
-                        .setColor(0x2b2d31)
-                        .setDescription(
-                            "**Premium RedM Scripts, MLOs & Custom Peds**\n" +
-                            "Select an option below and our team will assist you."
-                        )
-                        .setThumbnail(SMALL_IMAGE)
-                        .setImage(TICKET_IMAGE)
-                        .setFooter({
-                            text: "SAM STUDIO • RedM Scripts & Services"
-                        });
+                    const embed =
+                        new EmbedBuilder()
 
-                    const ticketButtonsRow1 = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder()
-                            .setCustomId("ticket_open_purchase")
-                            .setLabel("Purchase Script")
-                            .setEmoji("🛒")
-                            .setStyle(ButtonStyle.Success),
-                        new ButtonBuilder()
-                            .setCustomId("ticket_open_premium_support")
-                            .setLabel("Premium Support")
-                            .setEmoji("💎")
-                            .setStyle(ButtonStyle.Primary),
-                        new ButtonBuilder()
-                            .setCustomId("ticket_open_general_support")
-                            .setLabel("General Support")
-                            .setEmoji("🛠️")
-                            .setStyle(ButtonStyle.Secondary)
-                    );
+                            .setTitle(
+                                "🎟️ Ticket & Support"
+                            )
 
-                    const ticketButtonsRow2 = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder()
-                            .setCustomId("ticket_open_purchase_mlo")
-                            .setLabel("Purchase MLO")
-                            .setEmoji("🏠")
-                            .setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder()
-                            .setCustomId("ticket_open_purchase_ped")
-                            .setLabel("Purchase Ped")
-                            .setEmoji("🧍")
-                            .setStyle(ButtonStyle.Secondary),
-                        new ButtonBuilder()
-                            .setLabel("Visit Store")
-                            .setEmoji("🌐")
-                            .setStyle(ButtonStyle.Link)
-                            .setURL(STORE_URL)
-                    );
+                            .setColor(
+                                0x2b2d31
+                            )
+
+                            .setDescription(
+                                TICKET_PANEL_DESCRIPTION
+                            );
+
+                    const select =
+                        new StringSelectMenuBuilder()
+
+                            .setCustomId(
+                                "ticket_select"
+                            )
+
+                            .setPlaceholder(
+                                "Select ticket type"
+                            )
+
+                            .addOptions(
+                                Object.keys(TICKET_LABELS)
+                                    .map(type => ({
+                                        label:
+                                            TICKET_LABELS[type],
+                                        description:
+                                            TICKET_DESCRIPTIONS[type],
+                                        emoji:
+                                            EMOJIS[type],
+                                        value:
+                                            type
+                                    }))
+                            );
 
                     return interaction.reply({
-                        embeds: [embed],
-                        components: [ticketButtonsRow1, ticketButtonsRow2]
+
+                        embeds: [
+                            embed
+                        ],
+
+                        components: [
+                            new ActionRowBuilder()
+                                .addComponents(
+                                    select
+                                )
+                        ]
                     });
                 }
 
                 // ================= INVITES =================
 
                 if (cmd === "invites") {
-                    const target = interaction.options.getMember("user") || interaction.member;
 
-                    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+                    const target =
+                        interaction.options.getMember(
+                            "user"
+                        ) ||
+                        interaction.member;
 
-                    try {
-                        const guildInvites = await interaction.guild.invites.fetch();
-                        const ownedInvites = guildInvites.filter(invite => invite.inviter?.id === target.id);
-                        const totalUses = ownedInvites.reduce((sum, invite) => sum + (invite.uses || 0), 0);
-                        const activeCodes = ownedInvites
-                            .map(invite => `\`${invite.code}\` — ${invite.uses || 0} use(s)`)
-                            .slice(0, 10)
-                            .join("\n") || "No active invite links.";
+                    const embed =
+                        new EmbedBuilder()
 
-                        const embed = new EmbedBuilder()
-                            .setTitle(`📊 Invite Stats - ${target.user.tag}`)
-                            .setColor(0x2b2d31)
-                            .addFields(
-                                { name: "Current Uses", value: String(totalUses), inline: true },
-                                { name: "Active Links", value: String(ownedInvites.size), inline: true },
-                                { name: "Invite Codes", value: activeCodes }
+                            .setTitle(
+                                `📊 Invite Stats - ${target.user.tag}`
                             )
-                            .setThumbnail(target.user.displayAvatarURL({ dynamic: true }));
 
-                        return interaction.editReply({ embeds: [embed] });
-                    } catch (e) {
-                        return interaction.editReply("❌ Unable to fetch invites. Check bot invite permissions.");
-                    }
+                            .setColor(
+                                0x2b2d31
+                            )
+
+                            .setDescription(
+                                "Invite tracking is active.\nFull detailed stats coming soon."
+                            )
+
+                            .setThumbnail(
+                                target.user.displayAvatarURL({
+                                    dynamic: true
+                                })
+                            );
+
+                    return interaction.reply({
+                        embeds: [
+                            embed
+                        ]
+                    });
                 }
 
                 // ================= GIVEAWAY =================
@@ -2559,471 +1437,6 @@ client.on(
                     });
                 }
 
-                // ================= BULK MEMBER MANAGEMENT =================
-
-                if (cmd === "bulk") {
-                    const subcommand =
-                        interaction.options.getSubcommand();
-                    const dateString =
-                        interaction.options.getString("date", true);
-                    const dateType =
-                        interaction.options.getString("date_type", true);
-                    const condition =
-                        interaction.options.getString("condition", true);
-                    const targetType =
-                        interaction.options.getString("target_type", true);
-                    const preview =
-                        interaction.options.getBoolean("preview") || false;
-                    const utcOffset =
-                        interaction.options.getInteger("utc_offset") ?? 0;
-                    const dateWindow =
-                        parseBulkDate(dateString, utcOffset);
-
-                    if (!dateWindow) {
-                        return interaction.reply({
-                            content:
-                                "❌ Invalid date. Use YYYY-MM-DD, for example 2026-08-30.",
-                            flags:
-                                MessageFlags.Ephemeral
-                        });
-                    }
-
-                    const isNicknameAction =
-                        subcommand === "rename" ||
-                        subcommand === "real_names";
-                    const isRemoveRole =
-                        subcommand === "remove_role";
-                    const requiredPermission =
-                        isNicknameAction
-                            ? PermissionsBitField.Flags.ManageNicknames
-                            : PermissionsBitField.Flags.ManageRoles;
-
-                    if (
-                        !interaction.memberPermissions?.has(
-                            requiredPermission
-                        )
-                    ) {
-                        return interaction.reply({
-                            content:
-                                isNicknameAction
-                                    ? "❌ You need Manage Nicknames permission."
-                                    : "❌ You need Manage Roles permission.",
-                            flags:
-                                MessageFlags.Ephemeral
-                        });
-                    }
-
-                    const botMember =
-                        interaction.guild.members.me;
-
-                    if (
-                        !botMember?.permissions.has(
-                            requiredPermission
-                        )
-                    ) {
-                        return interaction.reply({
-                            content:
-                                isNicknameAction
-                                    ? "❌ Give the bot Manage Nicknames permission first."
-                                    : "❌ Give the bot Manage Roles permission first.",
-                            flags:
-                                MessageFlags.Ephemeral
-                        });
-                    }
-
-                    let role = null;
-
-                    if (
-                        subcommand === "role" ||
-                        subcommand === "remove_role"
-                    ) {
-                        role =
-                            interaction.options.getRole("role", true);
-
-                        if (
-                            role.id === interaction.guild.id ||
-                            role.managed ||
-                            !role.editable
-                        ) {
-                            return interaction.reply({
-                                content:
-                                    "❌ I cannot manage this role. Move the bot role above it and do not select @everyone or an integration role.",
-                                flags:
-                                    MessageFlags.Ephemeral
-                            });
-                        }
-
-                        const requesterIsAdmin =
-                            interaction.memberPermissions.has(
-                                PermissionsBitField.Flags.Administrator
-                            );
-                        const requesterHighestRole =
-                            interaction.member.roles.highest;
-
-                        if (
-                            !requesterIsAdmin &&
-                            role.position >= requesterHighestRole.position
-                        ) {
-                            return interaction.reply({
-                                content:
-                                    "❌ You can only bulk-manage roles below your highest role.",
-                                flags:
-                                    MessageFlags.Ephemeral
-                            });
-                        }
-                    }
-
-                    await interaction.deferReply({
-                        flags:
-                            MessageFlags.Ephemeral
-                    });
-
-                    const members =
-                        await interaction.guild.members.fetch();
-                    const selectedMembers =
-                        Array.from(members.values()).filter(member =>
-                            matchesBulkTarget(member, targetType) &&
-                            matchesBulkDate(
-                                member,
-                                dateType,
-                                condition,
-                                dateWindow
-                            )
-                        );
-
-                    const dateTypeLabel =
-                        dateType === "created"
-                            ? "account creation date"
-                            : "server join date";
-                    const conditionLabel =
-                        condition === "before"
-                            ? "on or before"
-                            : condition === "after"
-                                ? "on or after"
-                                : "on";
-                    const selectionLabel =
-                        `${getBulkTargetLabel(targetType)} with ${dateTypeLabel} ${conditionLabel} ${dateString} (${formatBulkUtcOffset(utcOffset)})`;
-
-                    if (selectedMembers.length === 0) {
-                        return interaction.editReply(
-                            `ℹ️ No members matched: ${selectionLabel}.`
-                        );
-                    }
-
-                    if (preview) {
-                        const manageable =
-                            selectedMembers.filter(member =>
-                                member.manageable &&
-                                member.id !== interaction.guild.ownerId
-                            );
-                        const membersWithRole =
-                            role
-                                ? selectedMembers.filter(member =>
-                                    member.roles.cache.has(role.id)
-                                ).length
-                                : 0;
-
-                        let previewDetail;
-
-                        if (subcommand === "role") {
-                            previewDetail =
-                                `Already have ${role.name}: ${membersWithRole}`;
-                        } else if (subcommand === "remove_role") {
-                            previewDetail =
-                                `Currently have ${role.name}: ${membersWithRole}`;
-                        } else if (subcommand === "real_names") {
-                            previewDetail =
-                                `Can receive unique names: ${Math.min(manageable.length, REAL_CUSTOM_NAMES.length)}/${REAL_CUSTOM_NAMES.length}`;
-                        } else {
-                            previewDetail =
-                                "Run again with preview:false to rename them.";
-                        }
-
-                        return interaction.editReply(
-                            [
-                                "🔎 **Bulk preview only — no changes made**",
-                                `Selection: ${selectionLabel}`,
-                                `Matching members: ${selectedMembers.length}`,
-                                isNicknameAction
-                                    ? `Nickname-manageable by bot: ${manageable.length}`
-                                    : `Selected for role action: ${selectedMembers.length}`,
-                                previewDetail
-                            ].join("\n")
-                        );
-                    }
-
-                    let changed = 0;
-                    let unchanged = 0;
-                    let skipped = 0;
-                    let failed = 0;
-                    let processed = 0;
-
-                    if (isNicknameAction) {
-                        const mode =
-                            subcommand === "rename"
-                                ? interaction.options.getString("mode", true)
-                                : null;
-                        const text =
-                            subcommand === "rename"
-                                ? interaction.options.getString("text", true)
-                                : null;
-                        const realNamePool =
-                            subcommand === "real_names"
-                                ? getShuffledRealNames()
-                                : [];
-                        const nicknameActionLabel =
-                            subcommand === "real_names"
-                                ? "Bulk real-name assignment"
-                                : "Bulk rename";
-                        let realNameIndex = 0;
-                        let poolExhausted = 0;
-
-                        for (const member of selectedMembers) {
-                            processed++;
-
-                            if (
-                                !member.manageable ||
-                                member.id === interaction.guild.ownerId
-                            ) {
-                                skipped++;
-                                await updateBulkProgress(
-                                    interaction,
-                                    nicknameActionLabel,
-                                    processed,
-                                    selectedMembers.length
-                                );
-                                continue;
-                            }
-
-                            if (
-                                subcommand === "real_names" &&
-                                realNameIndex >= realNamePool.length
-                            ) {
-                                skipped++;
-                                poolExhausted++;
-                                await updateBulkProgress(
-                                    interaction,
-                                    nicknameActionLabel,
-                                    processed,
-                                    selectedMembers.length
-                                );
-                                continue;
-                            }
-
-                            const currentName =
-                                member.nickname ||
-                                member.user.globalName ||
-                                member.user.username;
-
-                            if (
-                                subcommand === "rename" &&
-                                (
-                                    (mode === "prefix" && currentName.startsWith(text)) ||
-                                    (mode === "suffix" && currentName.endsWith(text))
-                                )
-                            ) {
-                                unchanged++;
-                                await updateBulkProgress(
-                                    interaction,
-                                    nicknameActionLabel,
-                                    processed,
-                                    selectedMembers.length
-                                );
-                                continue;
-                            }
-
-                            const newNickname =
-                                subcommand === "real_names"
-                                    ? realNamePool[realNameIndex++]
-                                    : buildBulkNickname(member, mode, text);
-
-                            if (!newNickname) {
-                                failed++;
-                            } else if (
-                                member.nickname === newNickname ||
-                                (!member.nickname && member.displayName === newNickname)
-                            ) {
-                                unchanged++;
-                            } else {
-                                try {
-                                    await member.setNickname(
-                                        newNickname,
-                                        `${nicknameActionLabel} by ${interaction.user.tag}`
-                                    );
-                                    changed++;
-                                } catch (error) {
-                                    failed++;
-                                }
-                            }
-
-                            await updateBulkProgress(
-                                interaction,
-                                nicknameActionLabel,
-                                processed,
-                                selectedMembers.length
-                            );
-                        }
-
-                        const log = new EmbedBuilder()
-                            .setColor("#5865F2")
-                            .setTitle(
-                                subcommand === "real_names"
-                                    ? "Bulk Real-Name Assignment"
-                                    : "Bulk Nickname Update"
-                            )
-                            .addFields(
-                                {
-                                    name: "Action By",
-                                    value: interaction.user.tag,
-                                    inline: true
-                                },
-                                {
-                                    name: "Selection",
-                                    value: selectionLabel
-                                },
-                                {
-                                    name: "Result",
-                                    value:
-                                        `Matched: ${selectedMembers.length}\nChanged: ${changed}\nUnchanged: ${unchanged}\nSkipped: ${skipped}\nPool exhausted: ${poolExhausted}\nFailed: ${failed}`
-                                }
-                            )
-                            .setTimestamp();
-
-                        await sendLog(
-                            interaction.guild,
-                            LOG_CHANNELS.NICKNAME,
-                            log
-                        );
-
-                        return interaction.editReply(
-                            [
-                                subcommand === "real_names"
-                                    ? "✅ **Bulk real-name assignment finished**"
-                                    : "✅ **Bulk rename finished**",
-                                `Selection: ${selectionLabel}`,
-                                `Matched: ${selectedMembers.length}`,
-                                `Changed: ${changed}`,
-                                `Already matching: ${unchanged}`,
-                                subcommand === "real_names"
-                                    ? `Skipped (hierarchy/pool limit): ${skipped}`
-                                    : `Skipped (owner/higher role): ${skipped}`,
-                                subcommand === "real_names"
-                                    ? `Unique name pool used: ${realNameIndex}/${REAL_CUSTOM_NAMES.length}`
-                                    : null,
-                                `Failed: ${failed}`
-                            ].filter(Boolean).join("\n")
-                        );
-                    }
-
-                    for (const member of selectedMembers) {
-                        processed++;
-
-                        if (
-                            isRemoveRole &&
-                            member.id === client.user.id
-                        ) {
-                            skipped++;
-                        } else if (
-                            !isRemoveRole &&
-                            member.roles.cache.has(role.id)
-                        ) {
-                            unchanged++;
-                        } else if (
-                            isRemoveRole &&
-                            !member.roles.cache.has(role.id)
-                        ) {
-                            unchanged++;
-                        } else {
-                            try {
-                                if (isRemoveRole) {
-                                    await member.roles.remove(
-                                        role,
-                                        `Bulk role removal by ${interaction.user.tag}`
-                                    );
-                                } else {
-                                    await member.roles.add(
-                                        role,
-                                        `Bulk role assignment by ${interaction.user.tag}`
-                                    );
-                                }
-                                changed++;
-                            } catch (error) {
-                                failed++;
-                            }
-                        }
-
-                        await updateBulkProgress(
-                            interaction,
-                            isRemoveRole
-                                ? "Bulk role removal"
-                                : "Bulk role assignment",
-                            processed,
-                            selectedMembers.length
-                        );
-                    }
-
-                    const log = new EmbedBuilder()
-                        .setColor(
-                            isRemoveRole
-                                ? "#ED4245"
-                                : "#57F287"
-                        )
-                        .setTitle(
-                            isRemoveRole
-                                ? "Bulk Role Removal"
-                                : "Bulk Role Assignment"
-                        )
-                        .addFields(
-                            {
-                                name: "Action By",
-                                value: interaction.user.tag,
-                                inline: true
-                            },
-                            {
-                                name: "Role",
-                                value: `${role.name} (${role.id})`,
-                                inline: true
-                            },
-                            {
-                                name: "Selection",
-                                value: selectionLabel
-                            },
-                            {
-                                name: "Result",
-                                value:
-                                    isRemoveRole
-                                        ? `Matched: ${selectedMembers.length}\nRemoved: ${changed}\nAlready absent: ${unchanged}\nSkipped: ${skipped}\nFailed: ${failed}`
-                                        : `Matched: ${selectedMembers.length}\nAdded: ${changed}\nAlready had role: ${unchanged}\nSkipped: ${skipped}\nFailed: ${failed}`
-                            }
-                        )
-                        .setTimestamp();
-
-                    await sendLog(
-                        interaction.guild,
-                        LOG_CHANNELS.ROLE,
-                        log
-                    );
-
-                    return interaction.editReply(
-                        [
-                            isRemoveRole
-                                ? "✅ **Bulk role removal finished**"
-                                : "✅ **Bulk role assignment finished**",
-                            `Role: ${role.name}`,
-                            `Selection: ${selectionLabel}`,
-                            `Matched: ${selectedMembers.length}`,
-                            isRemoveRole
-                                ? `Role removed: ${changed}`
-                                : `Role given: ${changed}`,
-                            isRemoveRole
-                                ? `Already absent: ${unchanged}`
-                                : `Already had role: ${unchanged}`,
-                            `Skipped: ${skipped}`,
-                            `Failed: ${failed}`
-                        ].join("\n")
-                    );
-                }
-
                 // ================= GIVE ROLE =================
 
                 if (cmd === "giverole") {
@@ -3233,524 +1646,955 @@ client.on(
             // MODAL SUBMIT
             // =================================================
 
-            if (interaction.isModalSubmit()) {
+            if (
+                interaction.isModalSubmit()
+            ) {
 
                 // ================= MSG MODAL =================
 
-                if (interaction.customId.startsWith("modal_msg_")) {
-                    const chanId = interaction.customId.replace("modal_msg_", "");
-                    const content = interaction.fields.getTextInputValue("msg_content");
-                    const channel = client.channels.cache.get(chanId);
+                if (
+                    interaction.customId.startsWith(
+                        "modal_msg_"
+                    )
+                ) {
+
+                    const chanId =
+                        interaction.customId.replace(
+                            "modal_msg_",
+                            ""
+                        );
+
+                    const content =
+                        interaction.fields.getTextInputValue(
+                            "msg_content"
+                        );
+
+                    const channel =
+                        client.channels.cache.get(
+                            chanId
+                        );
 
                     if (!channel) {
+
                         return interaction.reply({
-                            content: "Invalid Channel ID",
-                            flags: MessageFlags.Ephemeral
+                            content:
+                                "Invalid Channel ID",
+                            flags:
+                                MessageFlags.Ephemeral
                         });
                     }
 
-                    const embed = new EmbedBuilder()
-                        .setColor("#8B0000")
-                        .setDescription(content);
+                    const embed =
+                        new EmbedBuilder()
 
-                    await channel.send({ embeds: [embed] });
+                            .setColor(
+                                "#8B0000"
+                            )
+
+                            .setDescription(
+                                content
+                            );
+
+                    await channel.send({
+                        embeds: [
+                            embed
+                        ]
+                    });
 
                     return interaction.reply({
-                        content: "✅ Formatted message sent!",
-                        flags: MessageFlags.Ephemeral
+                        content:
+                            "✅ Formatted message sent!",
+                        flags:
+                            MessageFlags.Ephemeral
                     });
                 }
 
-                // Only ticket modals continue below
-                if (!interaction.customId.startsWith("modal_")) return;
+                // ================= TICKET MODAL =================
 
                 await interaction.deferReply({
-                    flags: MessageFlags.Ephemeral
+                    flags:
+                        MessageFlags.Ephemeral
                 });
 
-                const type = interaction.customId.replace("modal_", "");
+                const type =
+                    interaction.customId.replace(
+                        "modal_",
+                        ""
+                    );
 
-                if (!CATEGORY_NAMES[type]) {
-                    return interaction.editReply("❌ Invalid ticket type.");
-                }
+                if (
+                    await hasOpenTicket(
+                        interaction.guild,
+                        interaction.user.id,
+                        type
+                    )
+                ) {
 
-                if (await hasOpenTicket(interaction.guild, interaction.user.id, type)) {
                     return interaction.editReply({
-                        content: "❌ You already have an open ticket for this category!"
+                        content:
+                            "❌ You already have an open ticket for this category!"
                     });
                 }
 
-                const ticketCategory = await getTicketCategory(interaction.guild, type);
-                const ticketId = getNextTicketId();
-                const cleanUsername = cleanChannelName(interaction.user.username);
-                const typeSlug = TICKET_TYPE_SLUG[type] || "ticket";
+                const ticketCategory =
+                    await getTicketCategory(
+                        interaction.guild,
+                        type
+                    );
 
-                const ticketChannel = await interaction.guild.channels.create({
-                    name: `wait-${ticketId}-${typeSlug}-${cleanUsername}`.slice(0, 100),
-                    type: ChannelType.GuildText,
-                    parent: ticketCategory.id,
-                    topic:
-                        `sam-ticket-type:${type}|` +
-                        `sam-ticket-user:${interaction.user.id}|` +
-                        `sam-ticket-id:${ticketId}|` +
-                        `sam-ticket-status:waiting_staff|` +
-                        `sam-ticket-claimed:none`,
-                    permissionOverwrites: [
-                        {
-                            id: interaction.guild.id,
-                            deny: [PermissionsBitField.Flags.ViewChannel]
-                        },
-                        {
-                            id: interaction.user.id,
-                            allow: [
-                                PermissionsBitField.Flags.ViewChannel,
-                                PermissionsBitField.Flags.SendMessages,
-                                PermissionsBitField.Flags.ReadMessageHistory,
-                                PermissionsBitField.Flags.AttachFiles,
-                                PermissionsBitField.Flags.EmbedLinks
-                            ]
-                        },
-                        {
-                            id: STAFF_ROLE_ID,
-                            allow: [
-                                PermissionsBitField.Flags.ViewChannel,
-                                PermissionsBitField.Flags.SendMessages,
-                                PermissionsBitField.Flags.ReadMessageHistory,
-                                PermissionsBitField.Flags.AttachFiles,
-                                PermissionsBitField.Flags.EmbedLinks
-                            ]
-                        }
+                // Clean username for channel
+                const cleanUsername =
+                    interaction.user.username
+                        .toLowerCase()
+                        .replace(
+                            /[^a-z0-9-_]/g,
+                            "-"
+                        )
+                        .slice(
+                            0,
+                            40
+                        );
+
+                const ticketChannel =
+                    await interaction.guild.channels.create({
+
+                        name:
+                            `${EMOJIS[type] || "🎫"}-${cleanUsername}`,
+
+                        type:
+                            ChannelType.GuildText,
+
+                        parent:
+                            ticketCategory.id,
+
+                        topic:
+                            `sam-ticket-type:${type}|sam-ticket-user:${interaction.user.id}`,
+
+                        permissionOverwrites: [
+
+                            {
+                                id:
+                                    interaction.guild.id,
+
+                                deny: [
+                                    PermissionsBitField.Flags.ViewChannel
+                                ]
+                            },
+
+                            {
+                                id:
+                                    interaction.user.id,
+
+                                allow: [
+                                    PermissionsBitField.Flags.ViewChannel,
+                                    PermissionsBitField.Flags.SendMessages,
+                                    PermissionsBitField.Flags.ReadMessageHistory
+                                ]
+                            },
+
+                            {
+                                id:
+                                    STAFF_ROLE_ID,
+
+                                allow: [
+                                    PermissionsBitField.Flags.ViewChannel,
+                                    PermissionsBitField.Flags.SendMessages,
+                                    PermissionsBitField.Flags.ReadMessageHistory
+                                ]
+                            }
+                        ]
+                    });
+
+                // ================= BUILD FORM FIELDS =================
+
+                const fields = [];
+
+                interaction.fields.fields.forEach(
+                    f => {
+
+                        fields.push({
+
+                            name:
+                                f.customId
+                                    .toUpperCase()
+                                    .replace(
+                                        /_/g,
+                                        " "
+                                    ),
+
+                            value:
+                                `\`\`\`${f.value || "N/A"}\`\`\``
+                        });
+                    }
+                );
+
+                // ================= TICKET EMBED =================
+
+                const embed =
+                    new EmbedBuilder()
+
+                        .setColor(
+                            0x2b2d31
+                        )
+
+                        .setTitle(
+                            `${EMOJIS[type] || "🎫"} ${TICKET_LABELS[type] || "Support"} Ticket`
+                        )
+
+                        .setDescription(
+                            `Thank you for contacting **SAM STUDIO**.\nOur staff team will assist you shortly.`
+                        )
+
+                        .addFields(
+                            fields
+                        )
+
+                        .setFooter({
+                            text:
+                                `Opened by ${interaction.user.tag} • SAM STUDIO`
+                        })
+
+                        .setTimestamp();
+
+                // ================= BUTTONS =================
+
+                const row =
+                    new ActionRowBuilder()
+                        .addComponents(
+
+                            new ButtonBuilder()
+                                .setCustomId(
+                                    "claim"
+                                )
+                                .setLabel(
+                                    "Claim"
+                                )
+                                .setEmoji(
+                                    "🙋"
+                                )
+                                .setStyle(
+                                    ButtonStyle.Primary
+                                ),
+
+                            new ButtonBuilder()
+                                .setCustomId(
+                                    "close"
+                                )
+                                .setLabel(
+                                    "Close"
+                                )
+                                .setEmoji(
+                                    "🔒"
+                                )
+                                .setStyle(
+                                    ButtonStyle.Danger
+                                )
+                        );
+
+                await ticketChannel.send({
+
+                    content:
+                        `<@${interaction.user.id}> <@&${STAFF_ROLE_ID}>\n\n**Your Ticket Is Opened, The SAM STUDIO Staff Team Will Assist You As Soon as Possible. Till Then Please Wait! <3**`,
+
+                    embeds: [
+                        embed
+                    ],
+
+                    components: [
+                        row
                     ]
                 });
 
-                const formFields = [];
+                // ================= LOG =================
 
-                interaction.fields.fields.forEach(f => {
-                    const safeValue = String(f.value || "N/A").slice(0, 900);
-                    formFields.push({
-                        name: f.customId.toUpperCase().replace(/_/g, " "),
-                        value: `\`\`\`${safeValue}\`\`\``
+                const log =
+                    new EmbedBuilder()
+
+                        .setColor(
+                            "#3498DB"
+                        )
+
+                        .setTitle(
+                            "Ticket Created"
+                        )
+
+                        .addFields(
+
+                            {
+                                name:
+                                    "User",
+                                value:
+                                    interaction.user.tag
+                            },
+
+                            {
+                                name:
+                                    "Channel",
+                                value:
+                                    `<#${ticketChannel.id}>`
+                            },
+
+                            {
+                                name:
+                                    "Type",
+                                value:
+                                    TICKET_LABELS[type] ||
+                                    type.toUpperCase()
+                            }
+                        )
+
+                        .setTimestamp();
+
+                await sendLog(
+                    interaction.guild,
+                    LOG_CHANNELS.TICKET,
+                    log
+                );
+
+                return interaction.editReply(
+                    `✅ Ticket Created: ${ticketChannel}`
+                );
+            }
+
+            // =================================================
+            // TICKET SELECT MENU
+            // =================================================
+
+            if (
+                interaction.isStringSelectMenu() &&
+                interaction.customId ===
+                "ticket_select"
+            ) {
+
+                const type =
+                    interaction.values[0];
+
+                const label =
+                    TICKET_LABELS[type] ||
+                    "Support";
+
+                const modal =
+                    new ModalBuilder()
+
+                        .setCustomId(
+                            `modal_${type}`
+                        )
+
+                        .setTitle(
+                            `${EMOJIS[type] || "🎫"} ${label} Form`
+                        );
+
+                // =================================================
+                // PRE-PURCHASE QUESTIONS
+                // =================================================
+
+                if (type === "pre_purchase") {
+
+                    modal.addComponents(
+
+                        new ActionRowBuilder()
+                            .addComponents(
+
+                                new TextInputBuilder()
+
+                                    .setCustomId(
+                                        "help"
+                                    )
+
+                                    .setLabel(
+                                        "What would you like to know?"
+                                    )
+
+                                    .setPlaceholder(
+                                        "Enter your questions before purchasing..."
+                                    )
+
+                                    .setStyle(
+                                        TextInputStyle.Paragraph
+                                    )
+
+                                    .setRequired(
+                                        true
+                                    )
+                            )
+                    );
+                }
+
+                // =================================================
+                // SCRIPT SUPPORT
+                // =================================================
+
+                else if (
+                    type === "script_support"
+                ) {
+
+                    modal.addComponents(
+
+                        new ActionRowBuilder()
+                            .addComponents(
+
+                                new TextInputBuilder()
+
+                                    .setCustomId(
+                                        "script_issue"
+                                    )
+
+                                    .setLabel(
+                                        "How can we help with the script?"
+                                    )
+
+                                    .setPlaceholder(
+                                        "Explain the script issue in detail..."
+                                    )
+
+                                    .setStyle(
+                                        TextInputStyle.Paragraph
+                                    )
+
+                                    .setRequired(
+                                        true
+                                    )
+                            )
+                    );
+                }
+
+                // =================================================
+                // PARTNERS
+                // =================================================
+
+                else if (
+                    type === "partners"
+                ) {
+
+                    modal.addComponents(
+
+                        new ActionRowBuilder()
+                            .addComponents(
+
+                                new TextInputBuilder()
+
+                                    .setCustomId(
+                                        "partnership_details"
+                                    )
+
+                                    .setLabel(
+                                        "Tell us about your partnership"
+                                    )
+
+                                    .setPlaceholder(
+                                        "Share your community, project, and partnership details..."
+                                    )
+
+                                    .setStyle(
+                                        TextInputStyle.Paragraph
+                                    )
+
+                                    .setRequired(
+                                        true
+                                    )
+                            )
+                    );
+                }
+
+                else {
+                    return interaction.reply({
+                        content:
+                            "❌ Invalid ticket category.",
+                        flags:
+                            MessageFlags.Ephemeral
                     });
-                });
+                }
 
-                const meta = getTicketMeta(ticketChannel);
-
-                const embed = new EmbedBuilder()
-                    .setColor(0x2b2d31)
-                    .setTitle(`${EMOJIS[type] || "🎫"} ${TICKET_LABELS[type] || "Support"} Ticket #${ticketId}`)
-                    .setDescription(
-                        `Thank you for contacting **SAM STUDIO**.\n` +
-                        `Our staff team will assist you shortly.`
-                    )
-                    .addFields(
-                        { name: "Ticket", value: `#${ticketId}`, inline: true },
-                        { name: "Customer", value: `<@${interaction.user.id}>`, inline: true },
-                        { name: "Department", value: TICKET_LABELS[type] || "Support", inline: true },
-                        { name: "Status", value: TICKET_STATUS.waiting_staff.label, inline: true },
-                        { name: "Assigned", value: "Not Claimed", inline: true },
-                        ...formFields
-                    )
-                    .setFooter({
-                        text: `Opened by ${interaction.user.tag} • SAM STUDIO`
-                    })
-                    .setTimestamp();
-
-                await ticketChannel.send({
-                    content:
-                        `<@${interaction.user.id}> <@&${STAFF_ROLE_ID}>\n\n` +
-                        `**Ticket #${ticketId} opened successfully. A staff member will assist you soon.**`,
-                    embeds: [embed],
-                    components: buildTicketControls(meta)
-                });
-
-                const log = new EmbedBuilder()
-                    .setColor("#3498DB")
-                    .setTitle("Ticket Created")
-                    .addFields(
-                        { name: "Ticket", value: `#${ticketId}`, inline: true },
-                        { name: "User", value: interaction.user.tag, inline: true },
-                        { name: "Channel", value: `<#${ticketChannel.id}>`, inline: true },
-                        { name: "Type", value: TICKET_LABELS[type] || type.toUpperCase() }
-                    )
-                    .setTimestamp();
-
-                await sendLog(interaction.guild, LOG_CHANNELS.TICKET, log);
-
-                return interaction.editReply(`✅ Ticket Created: ${ticketChannel}`);
+                return interaction.showModal(
+                    modal
+                );
             }
 
             // =================================================
             // BUTTON HANDLER
             // =================================================
 
-            if (interaction.isButton()) {
-
-                // =================================================
-                // RATING BUTTONS (DM SAFE)
-                // =================================================
-
-                if (interaction.customId.startsWith("ticket_rate:")) {
-                    const [, guildId, ticketId, scoreRaw] = interaction.customId.split(":");
-                    const score = Number(scoreRaw);
-                    const guild = client.guilds.cache.get(guildId);
-
-                    if (!guild || !Number.isInteger(score) || score < 1 || score > 5) {
-                        return interaction.reply({
-                            content: "❌ Invalid rating.",
-                            flags: MessageFlags.Ephemeral
-                        }).catch(() => {});
-                    }
-
-                    const ratingLog = new EmbedBuilder()
-                        .setColor(score >= 4 ? "#2ECC71" : "#F1C40F")
-                        .setTitle("⭐ Support Rating")
-                        .addFields(
-                            { name: "Ticket", value: `#${ticketId}`, inline: true },
-                            { name: "Customer", value: interaction.user.tag, inline: true },
-                            { name: "Rating", value: `${score}/5 ⭐`, inline: true }
-                        )
-                        .setTimestamp();
-
-                    await sendLog(guild, LOG_CHANNELS.TICKET, ratingLog);
-
-                    return interaction.update({
-                        content: `✅ Thanks! You rated ticket **#${ticketId}** **${score}/5 ⭐**.`,
-                        components: []
-                    });
-                }
-
-                // =================================================
-                // OPEN TICKET BUTTONS
-                // =================================================
-
-                if (interaction.customId.startsWith("ticket_open_")) {
-                    const type = interaction.customId.replace("ticket_open_", "");
-
-                    if (!CATEGORY_NAMES[type]) {
-                        return interaction.reply({
-                            content: "❌ Invalid ticket category.",
-                            flags: MessageFlags.Ephemeral
-                        });
-                    }
-
-                    return interaction.showModal(buildTicketModal(type));
-                }
-
-                // Ticket controls below require a guild ticket channel
-                if (!interaction.guild || !interaction.channel) return;
-
-                const meta = getTicketMeta(interaction.channel);
-                const isStaff = interaction.member?.roles?.cache?.has(STAFF_ROLE_ID);
-                const isOpener = meta.userId === interaction.user.id;
+            if (
+                interaction.isButton()
+            ) {
 
                 // =================================================
                 // CLAIM
                 // =================================================
 
-                if (interaction.customId === "ticket_claim") {
-                    if (!isStaff) {
-                        return interaction.reply({
-                            content: "Staff Only!",
-                            flags: MessageFlags.Ephemeral
-                        });
-                    }
+                if (
+                    interaction.customId ===
+                    "claim"
+                ) {
 
-                    if (meta.claimedBy && meta.claimedBy !== "none") {
-                        return interaction.reply({
-                            content: `❌ This ticket is already claimed by <@${meta.claimedBy}>.`,
-                            flags: MessageFlags.Ephemeral
-                        });
-                    }
-
-                    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-                    const updated = await updateTicketMeta(interaction.channel, {
-                        claimedBy: interaction.user.id,
-                        status: "in_progress"
-                    });
-
-                    await renameTicketChannel(interaction.channel, updated);
-                    await refreshTicketControlMessage(interaction.channel, updated);
-
-                    await interaction.channel.send(
-                        `🙋 **Ticket #${updated.ticketId} claimed by <@${interaction.user.id}>.**`
-                    ).catch(() => {});
-
-                    const log = new EmbedBuilder()
-                        .setColor("#2ECC71")
-                        .setTitle("Ticket Claimed")
-                        .addFields(
-                            { name: "Ticket", value: `#${updated.ticketId}`, inline: true },
-                            { name: "Staff Member", value: interaction.user.tag, inline: true }
+                    if (
+                        !interaction.member.roles.cache.has(
+                            STAFF_ROLE_ID
                         )
-                        .setTimestamp();
+                    ) {
 
-                    await sendLog(interaction.guild, LOG_CHANNELS.TICKET, log);
-                    return interaction.editReply("✅ Ticket claimed.");
-                }
-
-                // =================================================
-                // UNCLAIM
-                // =================================================
-
-                if (interaction.customId === "ticket_unclaim") {
-                    if (!isStaff) {
                         return interaction.reply({
-                            content: "Staff Only!",
-                            flags: MessageFlags.Ephemeral
+                            content:
+                                "Staff Only!",
+                            flags:
+                                MessageFlags.Ephemeral
                         });
                     }
 
-                    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-                    const updated = await updateTicketMeta(interaction.channel, {
-                        claimedBy: "none",
-                        status: "waiting_staff"
+                    await interaction.deferReply({
+                        flags:
+                            MessageFlags.Ephemeral
                     });
 
-                    await renameTicketChannel(interaction.channel, updated);
-                    await refreshTicketControlMessage(interaction.channel, updated);
+                    const log =
+                        new EmbedBuilder()
 
-                    await interaction.channel.send(
-                        `↩️ **Ticket #${updated.ticketId} is now unclaimed and waiting for staff.**`
-                    ).catch(() => {});
+                            .setColor(
+                                "#2ECC71"
+                            )
 
-                    return interaction.editReply("✅ Ticket unclaimed.");
-                }
+                            .setTitle(
+                                "Ticket Claimed"
+                            )
 
-                // =================================================
-                // STATUS BUTTONS
-                // =================================================
+                            .addFields(
 
-                if (interaction.customId.startsWith("ticket_status_")) {
-                    if (!isStaff) {
-                        return interaction.reply({
-                            content: "Staff Only!",
-                            flags: MessageFlags.Ephemeral
-                        });
-                    }
+                                {
+                                    name:
+                                        "Channel",
+                                    value:
+                                        interaction.channel.name
+                                },
 
-                    const status = interaction.customId.replace("ticket_status_", "");
+                                {
+                                    name:
+                                        "Staff Member",
+                                    value:
+                                        interaction.user.tag
+                                }
+                            )
 
-                    if (!TICKET_STATUS[status] || status === "closed" || status === "solved") {
-                        return interaction.reply({
-                            content: "❌ Invalid ticket status.",
-                            flags: MessageFlags.Ephemeral
-                        });
-                    }
+                            .setTimestamp();
 
-                    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-                    const updated = await updateTicketMeta(interaction.channel, { status });
-                    await renameTicketChannel(interaction.channel, updated);
-                    await refreshTicketControlMessage(interaction.channel, updated);
-
-                    await interaction.channel.send(
-                        `📌 **Ticket #${updated.ticketId} status:** ${TICKET_STATUS[status].label}`
-                    ).catch(() => {});
-
-                    return interaction.editReply(`✅ Status changed to ${TICKET_STATUS[status].label}.`);
-                }
-
-                // =================================================
-                // SOLVED CONFIRMATION
-                // =================================================
-
-                if (interaction.customId === "ticket_solved") {
-                    if (!isStaff) {
-                        return interaction.reply({
-                            content: "Staff Only!",
-                            flags: MessageFlags.Ephemeral
-                        });
-                    }
-
-                    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-                    const updated = await updateTicketMeta(interaction.channel, {
-                        status: "solved"
-                    });
-
-                    await renameTicketChannel(interaction.channel, updated);
-                    await refreshTicketControlMessage(interaction.channel, updated);
-
-                    const confirmRow = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder()
-                            .setCustomId("ticket_solve_close")
-                            .setLabel("Yes, Close Ticket")
-                            .setEmoji("✅")
-                            .setStyle(ButtonStyle.Success),
-                        new ButtonBuilder()
-                            .setCustomId("ticket_solve_keepopen")
-                            .setLabel("Still Need Help")
-                            .setEmoji("💬")
-                            .setStyle(ButtonStyle.Secondary)
+                    await sendLog(
+                        interaction.guild,
+                        LOG_CHANNELS.TICKET,
+                        log
                     );
 
-                    await interaction.channel.send({
-                        content:
-                            `<@${updated.userId}> **has your issue been solved?**\n` +
-                            `You can close the ticket or keep it open if you still need help.`,
-                        components: [confirmRow]
-                    });
-
-                    return interaction.editReply("✅ Marked as solved. Waiting for customer confirmation.");
-                }
-
-                if (interaction.customId === "ticket_solve_keepopen") {
-                    if (!isOpener && !isStaff) {
-                        return interaction.reply({
-                            content: "Only the ticket opener or staff can use this button.",
-                            flags: MessageFlags.Ephemeral
-                        });
-                    }
-
-                    const updated = await updateTicketMeta(interaction.channel, {
-                        status: "waiting_staff"
-                    });
-
-                    await renameTicketChannel(interaction.channel, updated);
-                    await refreshTicketControlMessage(interaction.channel, updated);
-
-                    await interaction.update({
-                        content: `💬 **Ticket #${updated.ticketId} remains open. Staff will continue helping.**`,
-                        components: []
-                    });
-
-                    return;
-                }
-
-                if (interaction.customId === "ticket_solve_close") {
-                    if (!isOpener && !isStaff) {
-                        return interaction.reply({
-                            content: "Only the ticket opener or staff can use this button.",
-                            flags: MessageFlags.Ephemeral
-                        });
-                    }
-
-                    return closeTicket(interaction);
+                    return interaction.editReply(
+                        `✅ Ticket claimed by <@${interaction.user.id}>`
+                    );
                 }
 
                 // =================================================
                 // CLOSE
                 // =================================================
 
-                if (interaction.customId === "ticket_close") {
-                    if (!isOpener && !isStaff) {
-                        return interaction.reply({
-                            content: "Only the ticket opener or staff can close this ticket.",
-                            flags: MessageFlags.Ephemeral
-                        });
+                if (
+                    interaction.customId ===
+                    "close"
+                ) {
+
+                    await interaction.deferReply({
+                        flags:
+                            MessageFlags.Ephemeral
+                    });
+
+                    const creator =
+                        await getTicketCreator(
+                            interaction.channel
+                        );
+
+                    // ================= TRANSCRIPT =================
+
+                    if (creator) {
+
+                        try {
+
+                            const messages =
+                                await interaction.channel.messages.fetch({
+                                    limit:
+                                        100
+                                });
+
+                            let transcript =
+                                `SAM STUDIO Ticket Transcript\n` +
+                                `Ticket: ${interaction.channel.name}\n` +
+                                `Generated: ${new Date().toLocaleString()}\n\n`;
+
+                            messages
+                                .reverse()
+                                .forEach(
+                                    m => {
+
+                                        transcript +=
+                                            `[${m.createdAt.toLocaleString()}] ${m.author.tag}: ${m.content}\n`;
+                                    }
+                                );
+
+                            const buffer =
+                                Buffer.from(
+                                    transcript,
+                                    "utf-8"
+                                );
+
+                            await creator.send({
+
+                                content:
+                                    `📄 **Your SAM STUDIO Ticket Transcript** - ${interaction.channel.name}`,
+
+                                files: [
+                                    {
+                                        attachment:
+                                            buffer,
+
+                                        name:
+                                            `transcript-${interaction.channel.name}.txt`
+                                    }
+                                ]
+                            });
+
+                        } catch (e) {
+
+                            console.log(
+                                "Unable to DM transcript."
+                            );
+                        }
                     }
 
-                    return closeTicket(interaction);
+                    // Move to closed category
+
+                    await interaction.channel
+                        .setParent(
+                            CLOSED_CATEGORY_ID
+                        )
+                        .catch(() => {});
+
+                    // Prevent double closed-
+                    if (
+                        !interaction.channel.name.startsWith(
+                            "closed-"
+                        )
+                    ) {
+
+                        await interaction.channel.setName(
+                            `closed-${interaction.channel.name}`
+                        );
+                    }
+
+                    // ================= CLOSE LOG =================
+
+                    const log =
+                        new EmbedBuilder()
+
+                            .setColor(
+                                "#E74C3C"
+                            )
+
+                            .setTitle(
+                                "Ticket Closed"
+                            )
+
+                            .addFields(
+
+                                {
+                                    name:
+                                        "Channel",
+                                    value:
+                                        interaction.channel.name
+                                },
+
+                                {
+                                    name:
+                                        "Closed By",
+                                    value:
+                                        interaction.user.tag
+                                }
+                            )
+
+                            .setTimestamp();
+
+                    await sendLog(
+                        interaction.guild,
+                        LOG_CHANNELS.TICKET,
+                        log
+                    );
+
+                    // ================= REOPEN / DELETE =================
+
+                    const reopenRow =
+                        new ActionRowBuilder()
+                            .addComponents(
+
+                                new ButtonBuilder()
+                                    .setCustomId(
+                                        "reopen"
+                                    )
+                                    .setLabel(
+                                        "Reopen"
+                                    )
+                                    .setEmoji(
+                                        "🔓"
+                                    )
+                                    .setStyle(
+                                        ButtonStyle.Success
+                                    ),
+
+                                new ButtonBuilder()
+                                    .setCustomId(
+                                        "delete"
+                                    )
+                                    .setLabel(
+                                        "Delete"
+                                    )
+                                    .setEmoji(
+                                        "🗑️"
+                                    )
+                                    .setStyle(
+                                        ButtonStyle.Danger
+                                    )
+                            );
+
+                    return interaction.editReply({
+
+                        content:
+                            "Ticket Closed. ✅ Transcript sent to opener's DM.",
+
+                        components: [
+                            reopenRow
+                        ]
+                    });
                 }
 
                 // =================================================
                 // REOPEN
                 // =================================================
 
-                if (interaction.customId === "ticket_reopen") {
-                    if (!isStaff) {
+                if (
+                    interaction.customId ===
+                    "reopen"
+                ) {
+
+                    if (
+                        !interaction.member.roles.cache.has(
+                            STAFF_ROLE_ID
+                        )
+                    ) {
+
                         return interaction.reply({
-                            content: "Staff Only!",
-                            flags: MessageFlags.Ephemeral
+                            content:
+                                "Staff Only!",
+                            flags:
+                                MessageFlags.Ephemeral
                         });
                     }
 
-                    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-                    const originalCategory = await getTicketCategory(interaction.guild, meta.type);
-                    await interaction.channel.setParent(originalCategory.id).catch(() => {});
-
-                    if (meta.userId && meta.userId !== "unknown") {
-                        await interaction.channel.permissionOverwrites.edit(meta.userId, {
-                            ViewChannel: true,
-                            SendMessages: true,
-                            ReadMessageHistory: true,
-                            AttachFiles: true,
-                            EmbedLinks: true
-                        }).catch(() => {});
-                    }
-
-                    const updated = await updateTicketMeta(interaction.channel, {
-                        status: "waiting_staff",
-                        claimedBy: "none"
+                    await interaction.deferReply({
+                        flags:
+                            MessageFlags.Ephemeral
                     });
 
-                    await renameTicketChannel(interaction.channel, updated);
-                    await interaction.message.edit({ components: [] }).catch(() => {});
+                    const originalName =
+                        interaction.channel.name.replace(
+                            "closed-",
+                            ""
+                        );
 
-                    const reopenEmbed = new EmbedBuilder()
-                        .setColor("#2ECC71")
-                        .setTitle(`🔓 Ticket #${updated.ticketId} Reopened`)
-                        .setDescription(
-                            `<@${updated.userId}> can send messages again.\n` +
-                            `The ticket is waiting for a staff member.`
+                    // Find original ticket type from channel topic
+
+                    const typeMatch =
+                        interaction.channel.topic?.match(
+                            /sam-ticket-type:([^|]+)/
+                        );
+
+                    const originalType =
+                        typeMatch?.[1] ||
+                        "script_support";
+
+                    const originalCategory =
+                        await getTicketCategory(
+                            interaction.guild,
+                            originalType
+                        );
+
+                    await interaction.channel.setName(
+                        originalName
+                    );
+
+                    // Restore to EXACT original category
+
+                    await interaction.channel
+                        .setParent(
+                            originalCategory.id
                         )
-                        .setTimestamp();
+                        .catch(() => {});
 
-                    await interaction.channel.send({
-                        embeds: [reopenEmbed],
-                        components: buildTicketControls(updated)
-                    });
+                    const log =
+                        new EmbedBuilder()
 
-                    const log = new EmbedBuilder()
-                        .setColor("#2ECC71")
-                        .setTitle("Ticket Reopened")
-                        .addFields(
-                            { name: "Ticket", value: `#${updated.ticketId}`, inline: true },
-                            { name: "Reopened By", value: interaction.user.tag, inline: true },
-                            { name: "Ticket Type", value: TICKET_LABELS[updated.type] || updated.type }
-                        )
-                        .setTimestamp();
+                            .setColor(
+                                "#2ECC71"
+                            )
 
-                    await sendLog(interaction.guild, LOG_CHANNELS.TICKET, log);
-                    return interaction.editReply("✅ Ticket reopened.");
+                            .setTitle(
+                                "Ticket Reopened"
+                            )
+
+                            .addFields(
+
+                                {
+                                    name:
+                                        "Channel",
+                                    value:
+                                        interaction.channel.name
+                                },
+
+                                {
+                                    name:
+                                        "Reopened By",
+                                    value:
+                                        interaction.user.tag
+                                },
+
+                                {
+                                    name:
+                                        "Ticket Type",
+                                    value:
+                                        TICKET_LABELS[
+                                            originalType
+                                        ] ||
+                                        originalType
+                                }
+                            )
+
+                            .setTimestamp();
+
+                    await sendLog(
+                        interaction.guild,
+                        LOG_CHANNELS.TICKET,
+                        log
+                    );
+
+                    return interaction.editReply(
+                        "✅ Ticket Reopened!"
+                    );
                 }
 
                 // =================================================
                 // DELETE
                 // =================================================
 
-                if (interaction.customId === "ticket_delete") {
-                    if (!isStaff) {
+                if (
+                    interaction.customId ===
+                    "delete"
+                ) {
+
+                    if (
+                        !interaction.member.roles.cache.has(
+                            STAFF_ROLE_ID
+                        )
+                    ) {
+
                         return interaction.reply({
-                            content: "Staff Only!",
-                            flags: MessageFlags.Ephemeral
+                            content:
+                                "Staff Only!",
+                            flags:
+                                MessageFlags.Ephemeral
                         });
                     }
 
-                    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+                    await interaction.deferReply({
+                        flags:
+                            MessageFlags.Ephemeral
+                    });
 
-                    const currentMeta = getTicketMeta(interaction.channel);
-                    const messages = await fetchAllTicketMessages(interaction.channel).catch(() => []);
-                    const transcript = makeTranscript(interaction.channel, messages, currentMeta);
+                    // ================= TRANSCRIPT =================
 
-                    const log = new EmbedBuilder()
-                        .setColor("#000000")
-                        .setTitle("Ticket Deleted")
-                        .addFields(
-                            { name: "Ticket", value: `#${currentMeta.ticketId}`, inline: true },
-                            { name: "Channel", value: interaction.channel.name, inline: true },
-                            { name: "Deleted By", value: interaction.user.tag, inline: true }
-                        )
-                        .setTimestamp();
+                    const messages =
+                        await interaction.channel.messages.fetch({
+                            limit:
+                                100
+                        });
 
-                    const ticketLogChan = interaction.guild.channels.cache.get(LOG_CHANNELS.TICKET);
+                    let transcript =
+                        `SAM STUDIO Ticket Transcript\n` +
+                        `Ticket: ${interaction.channel.name}\n` +
+                        `Generated: ${new Date().toLocaleString()}\n\n`;
+
+                    messages
+                        .reverse()
+                        .forEach(
+                            m => {
+
+                                transcript +=
+                                    `[${m.createdAt.toLocaleString()}] ${m.author.tag}: ${m.content}\n`;
+                            }
+                        );
+
+                    const buffer =
+                        Buffer.from(
+                            transcript,
+                            "utf-8"
+                        );
+
+                    // ================= DELETE LOG =================
+
+                    const log =
+                        new EmbedBuilder()
+
+                            .setColor(
+                                "#000000"
+                            )
+
+                            .setTitle(
+                                "Ticket Deleted"
+                            )
+
+                            .addFields(
+
+                                {
+                                    name:
+                                        "Channel",
+                                    value:
+                                        interaction.channel.name
+                                },
+
+                                {
+                                    name:
+                                        "Deleted By",
+                                    value:
+                                        interaction.user.tag
+                                }
+                            )
+
+                            .setTimestamp();
+
+                    const ticketLogChan =
+                        interaction.guild.channels.cache.get(
+                            LOG_CHANNELS.TICKET
+                        );
 
                     if (ticketLogChan) {
+
                         await ticketLogChan.send({
-                            embeds: [log],
+
+                            embeds: [
+                                log
+                            ],
+
                             files: [
                                 {
-                                    attachment: transcript,
-                                    name: `transcript-${currentMeta.ticketId}.txt`
+                                    attachment:
+                                        buffer,
+
+                                    name:
+                                        `transcript-${interaction.channel.id}.txt`
                                 }
                             ]
-                        }).catch(() => {});
+                        });
                     }
 
-                    await interaction.editReply("🗑️ Ticket deleted.");
                     return interaction.channel.delete();
                 }
             }
@@ -4415,123 +3259,59 @@ client.on(
                 );
         }
 
-// ================= WELCOME =================
+        // ================= WELCOME =================
 
-if (WELCOME_CHANNEL_ID) {
+        if (
+            WELCOME_CHANNEL_ID
+        ) {
 
-    try {
+            const channel =
+                member.guild.channels.cache.get(
+                    WELCOME_CHANNEL_ID
+                );
 
-        const welcomeChannel =
-            await member.guild.channels.fetch(
-                WELCOME_CHANNEL_ID
-            );
+            if (channel) {
 
-        const imageChannel =
-            await member.guild.channels.fetch(
-                "1533736092610859028"
-            );
+                const embed =
+                    new EmbedBuilder()
 
-        const imageMessage =
-            await imageChannel.messages.fetch(
-                "1544888857131094057"
-            );
+                        .setTitle(
+                            "Welcome to SAM STUDIO | 2026!"
+                        )
 
-        const imageAttachment =
-            imageMessage.attachments.find(
-                attachment =>
-                    attachment.contentType?.startsWith("image/")
-            ) || imageMessage.attachments.first();
+                        .setColor(
+                            0x8B00FF
+                        )
 
-        if (!imageAttachment) {
-            throw new Error(
-                "Welcome image message mein picture nahi mili."
-            );
-        }
+                        .setDescription(
+                            `Hey ${member}, glad you found us!\nWe are happy to welcome you to SAM STUDIO.`
+                        )
 
-        const embed =
-            new EmbedBuilder()
-
-                .setTitle(
-                    "Welcome to SAM STUDIO | 2026!"
-                )
-
-                .setColor(
-                    0xB92E24
-                )
-
-                .setDescription(
-                    `Hey ${member}, glad you found us!\nWe are happy to welcome you to SAM STUDIO.`
-                )
-
-                .setThumbnail(
-                    member.user.displayAvatarURL({
-                        extension: "png",
-                        size: 256
-                    })
-                )
-
-                .setImage(
-                    imageAttachment.url
-                )
-
-                .setFooter({
-                    text:
-                        "SAM STUDIO | 2026"
-                })
-
-                .setTimestamp();
-
-        await welcomeChannel.send({
-            embeds: [
-                embed
-            ]
-        });
-
-        console.log(
-            `[WELCOME] Message sent for ${member.user.tag}`
-        );
-
-    } catch (error) {
-
-        console.error(
-            "[WELCOME ERROR]",
-            error
-        );
-    }
-}
-                    // Fallback: a welcome message still sends if the image fails.
-                    const fallbackEmbed =
-                        new EmbedBuilder()
-                            .setTitle(
-                                "Welcome to SAM STUDIO | 2026!"
-                            )
-                            .setColor(
-                                0xB92E24
-                            )
-                            .setDescription(
-                                `Hey ${member}, glad you found us!\nWe are happy to welcome you to SAM STUDIO.`
-                            )
-                            .setThumbnail(
-                                member.user.displayAvatarURL({
-                                    extension: "png",
-                                    size: 256,
-                                    forceStatic: true
-                                })
-                            )
-                            .setFooter({
-                                text:
-                                    "SAM STUDIO | 2026"
+                        .setThumbnail(
+                            member.user.displayAvatarURL({
+                                dynamic:
+                                    true
                             })
-                            .setTimestamp();
+                        )
 
-                    await channel.send({
-                        embeds: [
-                            fallbackEmbed
-                        ]
-                    }).catch(
-                        () => {}
-                    );
-                }
+                        .setImage(
+                            "https://cdn.discordapp.com/attachments/1525436919557914655/1525446030529794089/ChatGPT_Image_Jul_11_2026_03_17_45_PM.png?ex=6a5369d3&is=6a521853&hm=6c54f6174190b7ed868ff6c83a27a5a56c978c1e92fcc271242e2e2118bc909d&"
+                        )
+
+                        .setFooter({
+                            text:
+                                "SAM STUDIO | 2026"
+                        })
+
+                        .setTimestamp();
+
+                channel.send({
+                    embeds: [
+                        embed
+                    ]
+                }).catch(
+                    () => {}
+                );
             }
         }
 
@@ -4815,7 +3595,7 @@ async function endGiveaway(
 // =====================================================
 
 console.log(
-    "SAM STUDIO Bot is ready with Button Tickets + Ticket Status + Claim/Unclaim + Solved Flow + Ratings + All Logs!"
+    "SAM STUDIO Bot is ready with All Logs + Premium Ticket Panel + Advanced Anti-Ping + Invite Tracker!"
 );
 
 client.login(
