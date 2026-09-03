@@ -5,6 +5,7 @@ const {
     Partials,
     PermissionsBitField,
     EmbedBuilder,
+    AttachmentBuilder,
     ActionRowBuilder,
     ButtonBuilder,
     ButtonStyle,
@@ -19,6 +20,8 @@ const {
     MessageFlags
 } = require("discord.js");
 
+const { createCanvas, loadImage } = require("@napi-rs/canvas");
+
 // ================= CONFIG & ENV =================
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
@@ -29,6 +32,8 @@ const WELCOME_CHANNEL_ID = process.env.WELCOME_CHANNEL;
 const GOODBYE_CHANNEL_ID = process.env.GOODBYE_CHANNEL;
 const CLOSED_CATEGORY_ID = "1536545669270077460";
 const STORE_URL = "https://sam-studio.tebex.store/";
+const WELCOME_IMAGE_CHANNEL_ID = "1533736092610859028";
+const WELCOME_IMAGE_MESSAGE_ID = "1544888857131094057";
 
 // Log Channels
 const LOG_CHANNELS = {
@@ -155,6 +160,127 @@ async function sendLog(guild, channelId, embed) {
             embeds: [embed]
         }).catch(() => {});
     }
+}
+
+// ================= WELCOME IMAGE =================
+let welcomeBackgroundCache = null;
+
+async function getWelcomeBackground() {
+    if (welcomeBackgroundCache) {
+        return welcomeBackgroundCache;
+    }
+
+    const sourceChannel = await client.channels.fetch(
+        WELCOME_IMAGE_CHANNEL_ID
+    );
+
+    if (!sourceChannel || !sourceChannel.isTextBased()) {
+        throw new Error(
+            "Welcome image channel was not found or is not a text channel."
+        );
+    }
+
+    const sourceMessage = await sourceChannel.messages.fetch(
+        WELCOME_IMAGE_MESSAGE_ID
+    );
+
+    const imageAttachment =
+        sourceMessage.attachments.find(
+            attachment =>
+                attachment.contentType?.startsWith("image/")
+        ) || sourceMessage.attachments.first();
+
+    const embeddedImageUrl =
+        sourceMessage.embeds.find(
+            embed => embed.image?.url
+        )?.image?.url;
+
+    const backgroundUrl =
+        imageAttachment?.url || embeddedImageUrl;
+
+    if (!backgroundUrl) {
+        throw new Error(
+            "No image attachment was found in the welcome image message."
+        );
+    }
+
+    welcomeBackgroundCache = await loadImage(
+        backgroundUrl
+    );
+
+    return welcomeBackgroundCache;
+}
+
+async function createWelcomeImage(member) {
+    const background = await getWelcomeBackground();
+
+    const avatar = await loadImage(
+        member.user.displayAvatarURL({
+            extension: "png",
+            size: 512,
+            forceStatic: true
+        })
+    );
+
+    const canvas = createCanvas(
+        background.width,
+        background.height
+    );
+
+    const ctx = canvas.getContext("2d");
+
+    ctx.drawImage(
+        background,
+        0,
+        0,
+        canvas.width,
+        canvas.height
+    );
+
+    // Coordinates are based on the empty red circle in SAM STUDIO.png.
+    // Ratios keep the avatar correctly aligned if the banner is resized.
+    const centerX = canvas.width * 0.859;
+    const centerY = canvas.height * 0.505;
+    const radius = Math.min(
+        canvas.width,
+        canvas.height
+    ) * 0.276;
+
+    // Crop the avatar from the center so it fills the circle without stretching.
+    const cropSize = Math.min(
+        avatar.width,
+        avatar.height
+    );
+    const cropX = (avatar.width - cropSize) / 2;
+    const cropY = (avatar.height - cropSize) / 2;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(
+        centerX,
+        centerY,
+        radius,
+        0,
+        Math.PI * 2
+    );
+    ctx.closePath();
+    ctx.clip();
+
+    ctx.drawImage(
+        avatar,
+        cropX,
+        cropY,
+        cropSize,
+        cropSize,
+        centerX - radius,
+        centerY - radius,
+        radius * 2,
+        radius * 2
+    );
+
+    ctx.restore();
+
+    return canvas.toBuffer("image/png");
 }
 
 // ================= TIME PARSER =================
@@ -4302,47 +4428,96 @@ client.on(
                 );
 
             if (channel) {
+                try {
+                    const welcomeImage =
+                        await createWelcomeImage(
+                            member
+                        );
 
-                const embed =
-                    new EmbedBuilder()
+                    const imageName =
+                        `welcome-${member.id}.png`;
 
-                        .setTitle(
-                            "Welcome to SAM STUDIO | 2026!"
-                        )
+                    const attachment =
+                        new AttachmentBuilder(
+                            welcomeImage,
+                            {
+                                name: imageName
+                            }
+                        );
 
-                        .setColor(
-                            0x8B00FF
-                        )
+                    const embed =
+                        new EmbedBuilder()
 
-                        .setDescription(
-                            `Hey ${member}, glad you found us!\nWe are happy to welcome you to SAM STUDIO.`
-                        )
+                            .setTitle(
+                                "Welcome to SAM STUDIO | 2026!"
+                            )
 
-                        .setThumbnail(
-                            member.user.displayAvatarURL({
-                                dynamic:
-                                    true
+                            .setColor(
+                                0xB92E24
+                            )
+
+                            .setDescription(
+                                `Hey ${member}, glad you found us!\nWe are happy to welcome you to SAM STUDIO.`
+                            )
+
+                            .setImage(
+                                `attachment://${imageName}`
+                            )
+
+                            .setFooter({
+                                text:
+                                    "SAM STUDIO | 2026"
                             })
-                        )
 
-                        .setImage(
-                            "https://discord.com/channels/884214421747007488/1533736092610859028/1536546340304068639"
-                        )
+                            .setTimestamp();
 
-                        .setFooter({
-                            text:
-                                "SAM STUDIO | 2026"
-                        })
+                    await channel.send({
+                        embeds: [
+                            embed
+                        ],
+                        files: [
+                            attachment
+                        ]
+                    });
+                } catch (error) {
+                    console.error(
+                        "Welcome image error:",
+                        error
+                    );
 
-                        .setTimestamp();
+                    // Fallback: a welcome message still sends if the image fails.
+                    const fallbackEmbed =
+                        new EmbedBuilder()
+                            .setTitle(
+                                "Welcome to SAM STUDIO | 2026!"
+                            )
+                            .setColor(
+                                0xB92E24
+                            )
+                            .setDescription(
+                                `Hey ${member}, glad you found us!\nWe are happy to welcome you to SAM STUDIO.`
+                            )
+                            .setThumbnail(
+                                member.user.displayAvatarURL({
+                                    extension: "png",
+                                    size: 256,
+                                    forceStatic: true
+                                })
+                            )
+                            .setFooter({
+                                text:
+                                    "SAM STUDIO | 2026"
+                            })
+                            .setTimestamp();
 
-                channel.send({
-                    embeds: [
-                        embed
-                    ]
-                }).catch(
-                    () => {}
-                );
+                    await channel.send({
+                        embeds: [
+                            fallbackEmbed
+                        ]
+                    }).catch(
+                        () => {}
+                    );
+                }
             }
         }
 
