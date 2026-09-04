@@ -10,6 +10,7 @@ const {
     ButtonStyle,
     ChannelType,
     StringSelectMenuBuilder,
+    ChannelSelectMenuBuilder,
     ModalBuilder,
     TextInputBuilder,
     TextInputStyle,
@@ -27,6 +28,7 @@ const {
     FileUploadBuilder
 } = require("discord.js");
 const fs = require("fs");
+const path = require("path");
 const http = require("http");
 
 // ================= CONFIG & ENV =================
@@ -106,6 +108,117 @@ let antiMentionChannels = new Set();
 let activeGiveaways = new Map();
 let invites = new Map();
 
+// Message builder drafts stay private and expire automatically.
+const messageDrafts = new Map();
+const MESSAGE_STORE_FILE = path.join(
+    __dirname,
+    "sam_message_data.json"
+);
+const MESSAGE_UPLOAD_DIR = path.join(
+    __dirname,
+    "sam_message_uploads"
+);
+
+const MESSAGE_TEMPLATES = {
+    blank: {
+        title: "",
+        content: "",
+        buttons: []
+    },
+    script_release: {
+        title: "New Script Release",
+        content:
+            "A new SAM STUDIO script is now available.\n\n**Features**\n- Add feature details here\n- Add compatibility details here\n- Add installation details here",
+        buttons: []
+    },
+    update: {
+        title: "Script Update",
+        content:
+            "A new update is now available.\n\n**Changes**\n- Add update details here\n- Add fixes here",
+        buttons: []
+    },
+    sale: {
+        title: "Limited-Time Sale",
+        content:
+            "Our special sale is live now. Add the discount, expiry time, and product details here.",
+        buttons: []
+    },
+    announcement: {
+        title: "SAM STUDIO Announcement",
+        content:
+            "Write the complete announcement here.",
+        buttons: []
+    },
+    partnership: {
+        title: "Official Partnership",
+        content:
+            "We are pleased to announce our new partnership. Add the complete details here.",
+        buttons: []
+    }
+};
+
+function loadMessageStore() {
+    try {
+        if (!fs.existsSync(MESSAGE_STORE_FILE)) {
+            return {
+                messages: {},
+                scheduled: {}
+            };
+        }
+
+        const parsed = JSON.parse(
+            fs.readFileSync(
+                MESSAGE_STORE_FILE,
+                "utf8"
+            )
+        );
+
+        return {
+            messages:
+                parsed.messages &&
+                typeof parsed.messages === "object"
+                    ? parsed.messages
+                    : {},
+            scheduled:
+                parsed.scheduled &&
+                typeof parsed.scheduled === "object"
+                    ? parsed.scheduled
+                    : {}
+        };
+    } catch (error) {
+        console.error(
+            "Could not load SAM message data:",
+            error.message
+        );
+
+        return {
+            messages: {},
+            scheduled: {}
+        };
+    }
+}
+
+let messageStore = loadMessageStore();
+
+function saveMessageStore() {
+    try {
+        fs.writeFileSync(
+            MESSAGE_STORE_FILE,
+            JSON.stringify(
+                messageStore,
+                null,
+                2
+            ),
+            "utf8"
+        );
+    } catch (error) {
+        console.error(
+            "Could not save SAM message data:",
+            error.message
+        );
+    }
+}
+
 // ================= ANTI PING =================
 const ANTI_PING_MEMBERS = new Set();
 const ANTI_PING_ROLE_ID = "1215053255416217612";
@@ -174,8 +287,10 @@ function parseMessageButtons(rawValue) {
             );
         }
 
-        const label = line.slice(0, separatorIndex).trim();
-        const url = line.slice(separatorIndex + 1).trim();
+        const parts = line.split("|").map(part => part.trim());
+        const label = parts[0];
+        const url = parts[1];
+        const emoji = parts.slice(2).join("|").trim();
 
         if (!label || label.length > 80) {
             throw new Error(
@@ -191,9 +306,768 @@ function parseMessageButtons(rawValue) {
 
         return {
             label,
-            url
+            url,
+            emoji: emoji || null
         };
     });
+}
+
+function hasMessageBuilderPermission(member) {
+    return Boolean(
+        member?.permissions?.has(
+            PermissionsBitField.Flags.ManageMessages
+        ) ||
+        isStaffMember(member)
+    );
+}
+
+function makeDraftId() {
+    return (
+        Date.now().toString(36) +
+        Math.random().toString(36).slice(2, 8)
+    );
+}
+
+function buttonsToInput(buttons = []) {
+    return buttons.map(button =>
+        [button.label, button.url, button.emoji]
+            .filter(Boolean)
+            .join(" | ")
+    ).join("\n");
+}
+
+function cloneTemplate(templateName) {
+    const template =
+        MESSAGE_TEMPLATES[templateName] ||
+        MESSAGE_TEMPLATES.blank;
+
+    return JSON.parse(JSON.stringify(template));
+}
+
+function createMessageDraft({
+    interaction,
+    templateName = "blank",
+    source = null,
+    mode = "new",
+    messageId = null
+}) {
+    const template = source || cloneTemplate(templateName);
+    const id = makeDraftId();
+
+    const draft = {
+        id,
+        ownerId: interaction.user.id,
+        guildId: interaction.guildId,
+        channelId:
+            template.channelId ||
+            interaction.channelId,
+        title: template.title || "",
+        content: template.content || "",
+        buttons: Array.isArray(template.buttons)
+            ? template.buttons
+            : [],
+        images: Array.isArray(template.images)
+            ? template.images
+            : [],
+        accentColor:
+            Number.isInteger(template.accentColor)
+                ? template.accentColor
+                : 0x8B0000,
+        footer: template.footer || "",
+        ping: template.ping || "none",
+        reactions: Array.isArray(template.reactions)
+            ? template.reactions
+            : ["❤️", "🔥", "😊"],
+        scheduleAt: null,
+        mode,
+        messageId,
+        originalChannelId:
+            mode === "edit"
+                ? template.channelId || interaction.channelId
+                : null,
+        clearExistingAttachments: false,
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+    };
+
+    messageDrafts.set(id, draft);
+    return draft;
+}
+
+function getOwnedDraft(interaction, draftId) {
+    const draft = messageDrafts.get(draftId);
+
+    if (!draft || draft.ownerId !== interaction.user.id) {
+        return null;
+    }
+
+    draft.updatedAt = Date.now();
+    return draft;
+}
+
+function addOptionalValue(input, value) {
+    if (value) input.setValue(String(value).slice(0, 4000));
+    return input;
+}
+
+function buildMessageModal(draft) {
+    const channelSelect = new ChannelSelectMenuBuilder()
+        .setCustomId("msg_channel")
+        .setPlaceholder("Select destination channel")
+        .setChannelTypes(
+            ChannelType.GuildText,
+            ChannelType.GuildAnnouncement
+        )
+        .setMinValues(1)
+        .setMaxValues(1)
+        .setRequired(true);
+
+    if (draft.channelId) {
+        channelSelect.setDefaultChannels(draft.channelId);
+    }
+
+    const titleInput = addOptionalValue(
+        new TextInputBuilder()
+            .setCustomId("msg_title")
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder("Example: SAM Scale")
+            .setMaxLength(200)
+            .setRequired(false),
+        draft.title
+    );
+
+    const contentInput = addOptionalValue(
+        new TextInputBuilder()
+            .setCustomId("msg_content")
+            .setStyle(TextInputStyle.Paragraph)
+            .setPlaceholder("Write the complete message here...")
+            .setMaxLength(3500)
+            .setRequired(false),
+        draft.content
+    );
+
+    const buttonsInput = addOptionalValue(
+        new TextInputBuilder()
+            .setCustomId("msg_buttons")
+            .setStyle(TextInputStyle.Paragraph)
+            .setPlaceholder(
+                "Shop | https://link.com | 🛒\nVideo | https://youtube.com | ▶️"
+            )
+            .setMaxLength(3000)
+            .setRequired(false),
+        buttonsToInput(draft.buttons)
+    );
+
+    const imageUpload = new FileUploadBuilder()
+        .setCustomId("msg_images")
+        .setMinValues(0)
+        .setMaxValues(10)
+        .setRequired(false);
+
+    return new ModalBuilder()
+        .setCustomId(`msg_main_modal:${draft.id}`)
+        .setTitle(
+            draft.mode === "edit"
+                ? "Edit SAM STUDIO Message"
+                : "SAM STUDIO Message Builder"
+        )
+        .addLabelComponents(
+            new LabelBuilder()
+                .setLabel("Destination Channel")
+                .setDescription(
+                    draft.mode === "edit"
+                        ? "Keep the original channel; use Duplicate to copy elsewhere."
+                        : "Select the channel—no ID is needed."
+                )
+                .setChannelSelectMenuComponent(channelSelect),
+            new LabelBuilder()
+                .setLabel("Title (Optional)")
+                .setTextInputComponent(titleInput),
+            new LabelBuilder()
+                .setLabel("Full Message (Optional)")
+                .setTextInputComponent(contentInput),
+            new LabelBuilder()
+                .setLabel("Pictures (Optional)")
+                .setDescription(
+                    draft.images.length
+                        ? "Upload new pictures to replace the current ones; leave empty to keep them."
+                        : "Upload up to 10 PNG, JPG, GIF, or WEBP pictures."
+                )
+                .setFileUploadComponent(imageUpload),
+            new LabelBuilder()
+                .setLabel("Custom Buttons (Optional)")
+                .setDescription("Name | Link | Emoji (emoji is optional)")
+                .setTextInputComponent(buttonsInput)
+        );
+}
+
+function buildAdvancedMessageModal(draft) {
+    const colorInput = addOptionalValue(
+        new TextInputBuilder()
+            .setCustomId("msg_color")
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder("#8B0000")
+            .setMaxLength(7)
+            .setRequired(false),
+        `#${draft.accentColor.toString(16).padStart(6, "0").toUpperCase()}`
+    );
+
+    const footerInput = addOptionalValue(
+        new TextInputBuilder()
+            .setCustomId("msg_footer")
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder("Example: SAM STUDIO • Premium Scripts")
+            .setMaxLength(300)
+            .setRequired(false),
+        draft.footer
+    );
+
+    const pingInput = addOptionalValue(
+        new TextInputBuilder()
+            .setCustomId("msg_ping")
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder("none, everyone, or Role ID")
+            .setMaxLength(25)
+            .setRequired(false),
+        draft.ping === "none" ? "" : draft.ping
+    );
+
+    const reactionsInput = addOptionalValue(
+        new TextInputBuilder()
+            .setCustomId("msg_reactions")
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder("❤️ 🔥 😊  (blank = no reactions)")
+            .setMaxLength(100)
+            .setRequired(false),
+        draft.reactions.join(" ")
+    );
+
+    const scheduleInput = addOptionalValue(
+        new TextInputBuilder()
+            .setCustomId("msg_schedule")
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder("10m, 2h, 1d, or 2026-09-05T18:30:00Z")
+            .setMaxLength(40)
+            .setRequired(false),
+        draft.scheduleAt
+            ? new Date(draft.scheduleAt).toISOString()
+            : ""
+    );
+
+    return new ModalBuilder()
+        .setCustomId(`msg_advanced_modal:${draft.id}`)
+        .setTitle("Advanced Message Settings")
+        .addLabelComponents(
+            new LabelBuilder()
+                .setLabel("Accent Colour (Optional)")
+                .setTextInputComponent(colorInput),
+            new LabelBuilder()
+                .setLabel("Footer (Optional)")
+                .setTextInputComponent(footerInput),
+            new LabelBuilder()
+                .setLabel("Ping (Optional)")
+                .setDescription("Use none, everyone, or a role ID.")
+                .setTextInputComponent(pingInput),
+            new LabelBuilder()
+                .setLabel("Reactions (Optional)")
+                .setDescription("Separate emojis with spaces.")
+                .setTextInputComponent(reactionsInput),
+            new LabelBuilder()
+                .setLabel("Schedule (Optional)")
+                .setDescription("Leave blank to send immediately.")
+                .setTextInputComponent(scheduleInput)
+        );
+}
+
+function parseAccentColor(value) {
+    const clean = String(value || "").trim();
+    if (!clean) return 0x8B0000;
+
+    if (!/^#?[0-9a-f]{6}$/i.test(clean)) {
+        throw new Error("Accent colour must look like #8B0000.");
+    }
+
+    return parseInt(clean.replace("#", ""), 16);
+}
+
+function parseMessagePing(value, guild) {
+    const clean = String(value || "").trim();
+    if (!clean || clean.toLowerCase() === "none") return "none";
+
+    if (["everyone", "@everyone"].includes(clean.toLowerCase())) {
+        return "everyone";
+    }
+
+    const roleId = clean.replace(/[<@&>\s]/g, "");
+    if (!/^\d{17,20}$/.test(roleId) || !guild.roles.cache.has(roleId)) {
+        throw new Error("Ping must be none, everyone, or a valid Role ID.");
+    }
+
+    return roleId;
+}
+
+function parseMessageReactions(value) {
+    const clean = String(value || "").trim();
+    if (!clean) return [];
+
+    const reactions = clean.split(/\s+/).filter(Boolean);
+    if (reactions.length > 5) {
+        throw new Error("Maximum 5 reactions are allowed.");
+    }
+
+    return reactions;
+}
+
+function parseMessageSchedule(value) {
+    const clean = String(value || "").trim();
+    if (!clean || clean.toLowerCase() === "now") return null;
+
+    let timestamp;
+    const duration = clean.match(/^(\d+)(m|h|d)$/i);
+
+    if (duration) {
+        const unitMs = {
+            m: 60_000,
+            h: 3_600_000,
+            d: 86_400_000
+        }[duration[2].toLowerCase()];
+
+        timestamp = Date.now() + Number(duration[1]) * unitMs;
+    } else {
+        timestamp = Date.parse(clean);
+    }
+
+    if (!Number.isFinite(timestamp) || timestamp < Date.now() + 30_000) {
+        throw new Error(
+            "Schedule must be at least 30 seconds ahead. Use 10m, 2h, 1d, or an ISO UTC date."
+        );
+    }
+
+    return timestamp;
+}
+
+function messagePingText(draft) {
+    if (draft.ping === "everyone") return "@everyone";
+    if (/^\d{17,20}$/.test(draft.ping || "")) {
+        return `<@&${draft.ping}>`;
+    }
+    return "";
+}
+
+function messageAllowedMentions(draft) {
+    if (draft.ping === "everyone") {
+        return {
+            parse: ["everyone"],
+            roles: [],
+            users: []
+        };
+    }
+
+    if (/^\d{17,20}$/.test(draft.ping || "")) {
+        return {
+            parse: [],
+            roles: [draft.ping],
+            users: []
+        };
+    }
+
+    return {
+        parse: [],
+        roles: [],
+        users: []
+    };
+}
+
+function safeButton(button) {
+    const builder = new ButtonBuilder()
+        .setLabel(button.label)
+        .setStyle(ButtonStyle.Link)
+        .setURL(button.url);
+
+    if (button.emoji) {
+        try {
+            builder.setEmoji(button.emoji);
+        } catch (error) {
+            // Invalid emoji is ignored; the button itself still works.
+        }
+    }
+
+    return builder;
+}
+
+function buildMessageContainer(draft, mediaUrls = []) {
+    const displayParts = [];
+    const pingText = messagePingText(draft);
+
+    if (pingText) displayParts.push(pingText);
+    if (draft.title) displayParts.push(`## ⚡ ${draft.title}`);
+    if (draft.content) displayParts.push(draft.content);
+    if (!draft.title && !draft.content) {
+        displayParts.push("## ⚡ SAM STUDIO");
+    }
+
+    const container = new ContainerBuilder()
+        .setAccentColor(draft.accentColor)
+        .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(displayParts.join("\n\n"))
+        );
+
+    if (mediaUrls.length) {
+        const gallery = new MediaGalleryBuilder();
+
+        mediaUrls.forEach((url, index) => {
+            gallery.addItems(item =>
+                item
+                    .setURL(url)
+                    .setDescription(
+                        `${draft.title || "SAM STUDIO"} image ${index + 1}`
+                    )
+            );
+        });
+
+        container
+            .addSeparatorComponents(
+                new SeparatorBuilder()
+                    .setDivider(true)
+                    .setSpacing(SeparatorSpacingSize.Small)
+            )
+            .addMediaGalleryComponents(gallery);
+    }
+
+    if (draft.buttons.length) {
+        container
+            .addSeparatorComponents(
+                new SeparatorBuilder()
+                    .setDivider(true)
+                    .setSpacing(SeparatorSpacingSize.Small)
+            )
+            .addActionRowComponents(
+                new ActionRowBuilder().addComponents(
+                    draft.buttons.map(safeButton)
+                )
+            );
+    }
+
+    if (draft.footer) {
+        container
+            .addSeparatorComponents(
+                new SeparatorBuilder()
+                    .setDivider(true)
+                    .setSpacing(SeparatorSpacingSize.Small)
+            )
+            .addTextDisplayComponents(
+                new TextDisplayBuilder().setContent(`-# ${draft.footer}`)
+            );
+    }
+
+    return container;
+}
+
+function buildDraftPreview(draft, includeFlags = true) {
+    const mediaUrls = draft.images
+        .map(image => image.url)
+        .filter(Boolean);
+
+    const controls = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(`msg_send:${draft.id}`)
+            .setLabel(draft.scheduleAt ? "Schedule" : "Send")
+            .setEmoji(draft.scheduleAt ? "⏰" : "✅")
+            .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+            .setCustomId(`msg_edit:${draft.id}`)
+            .setLabel("Edit")
+            .setEmoji("✏️")
+            .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+            .setCustomId(`msg_advanced:${draft.id}`)
+            .setLabel("Advanced")
+            .setEmoji("⚙️")
+            .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+            .setCustomId(`msg_copy:${draft.id}`)
+            .setLabel("Duplicate")
+            .setEmoji("📋")
+            .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+            .setCustomId(`msg_cancel:${draft.id}`)
+            .setLabel("Cancel")
+            .setEmoji("✖️")
+            .setStyle(ButtonStyle.Danger)
+    );
+
+    const components = [
+        new TextDisplayBuilder().setContent(
+            `### Private Preview\nDestination: <#${draft.channelId}>` +
+            (draft.scheduleAt
+                ? ` • Scheduled: <t:${Math.floor(draft.scheduleAt / 1000)}:F>`
+                : "")
+        ),
+        buildMessageContainer(draft, mediaUrls),
+        controls
+    ];
+
+    if (draft.images.length) {
+        components.push(
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setCustomId(`msg_clear_images:${draft.id}`)
+                    .setLabel("Remove All Pictures")
+                    .setEmoji("🗑️")
+                    .setStyle(ButtonStyle.Secondary)
+            )
+        );
+    }
+
+    const payload = { components };
+    if (includeFlags) {
+        payload.flags =
+            MessageFlags.Ephemeral |
+            MessageFlags.IsComponentsV2;
+    }
+
+    return payload;
+}
+
+function fileExtension(image) {
+    const match = String(image.name || "")
+        .match(/\.(png|jpe?g|gif|webp)$/i);
+
+    if (match) return match[1].toLowerCase().replace("jpeg", "jpg");
+
+    return {
+        "image/png": "png",
+        "image/jpeg": "jpg",
+        "image/gif": "gif",
+        "image/webp": "webp"
+    }[image.contentType] || "png";
+}
+
+function buildTargetMessagePayload(draft) {
+    const files = [];
+    const mediaUrls = draft.images.map((image, index) => {
+        if (!image.needsUpload) return image.url;
+
+        const name =
+            `sam-${draft.id}-${index + 1}.${fileExtension(image)}`;
+
+        files.push({
+            attachment: image.localPath || image.url,
+            name
+        });
+
+        return `attachment://${name}`;
+    });
+
+    const payload = {
+        components: [buildMessageContainer(draft, mediaUrls)],
+        flags: MessageFlags.IsComponentsV2,
+        allowedMentions: messageAllowedMentions(draft)
+    };
+
+    if (files.length) payload.files = files;
+    if (draft.mode === "edit" && draft.clearExistingAttachments) {
+        payload.attachments = [];
+    }
+
+    return payload;
+}
+
+function recordFromDraft(draft, sentMessage) {
+    const attachmentImages = Array.from(
+        sentMessage.attachments.values()
+    ).map(attachment => ({
+        url: attachment.url,
+        name: attachment.name,
+        contentType: attachment.contentType || null,
+        needsUpload: false
+    }));
+
+    return {
+        guildId: draft.guildId,
+        channelId: sentMessage.channelId,
+        messageId: sentMessage.id,
+        title: draft.title,
+        content: draft.content,
+        buttons: draft.buttons,
+        images: attachmentImages.length
+            ? attachmentImages
+            : draft.images.filter(image => !image.needsUpload),
+        accentColor: draft.accentColor,
+        footer: draft.footer,
+        ping: draft.ping,
+        reactions: draft.reactions,
+        updatedBy: draft.ownerId,
+        updatedAt: Date.now()
+    };
+}
+
+async function getDraftChannel(draft) {
+    const guild = client.guilds.cache.get(draft.guildId);
+    if (!guild) throw new Error("Server was not found.");
+
+    const channel =
+        guild.channels.cache.get(draft.channelId) ||
+        await guild.channels.fetch(draft.channelId).catch(() => null);
+
+    if (!channel || !channel.isTextBased() || typeof channel.send !== "function") {
+        throw new Error("Destination channel was not found or is not sendable.");
+    }
+
+    const botPermissions = channel.permissionsFor(guild.members.me);
+    if (
+        !botPermissions?.has(PermissionsBitField.Flags.ViewChannel) ||
+        !botPermissions?.has(PermissionsBitField.Flags.SendMessages)
+    ) {
+        throw new Error("I do not have permission to send in that channel.");
+    }
+
+    return channel;
+}
+
+async function deliverMessageDraft(draft) {
+    const channel = await getDraftChannel(draft);
+    const payload = buildTargetMessagePayload(draft);
+    let sentMessage;
+
+    if (draft.mode === "edit" && draft.messageId) {
+        const original = await channel.messages
+            .fetch(draft.messageId)
+            .catch(() => null);
+
+        if (!original || original.author.id !== client.user.id) {
+            throw new Error("The original bot message was not found.");
+        }
+
+        sentMessage = await original.edit(payload);
+    } else {
+        sentMessage = await channel.send(payload);
+    }
+
+    for (const emoji of draft.reactions) {
+        await sentMessage.react(emoji).catch(() => {});
+    }
+
+    const previousId = draft.messageId;
+    if (previousId && previousId !== sentMessage.id) {
+        delete messageStore.messages[previousId];
+    }
+
+    messageStore.messages[sentMessage.id] =
+        recordFromDraft(draft, sentMessage);
+    saveMessageStore();
+
+    const log = new EmbedBuilder()
+        .setColor(draft.accentColor)
+        .setTitle(
+            draft.mode === "edit"
+                ? "Message Edited"
+                : "Message Sent"
+        )
+        .addFields(
+            {
+                name: "Staff",
+                value: `<@${draft.ownerId}>`,
+                inline: true
+            },
+            {
+                name: "Channel",
+                value: `<#${sentMessage.channelId}>`,
+                inline: true
+            },
+            {
+                name: "Message",
+                value: `[Open Message](${sentMessage.url})`,
+                inline: false
+            }
+        )
+        .setTimestamp();
+
+    await sendLog(
+        channel.guild,
+        LOG_CHANNELS.MSG,
+        log
+    );
+
+    return sentMessage;
+}
+
+async function cacheScheduledImages(draft) {
+    if (!draft.images.some(image => image.needsUpload && !image.localPath)) {
+        return;
+    }
+
+    await fs.promises.mkdir(
+        MESSAGE_UPLOAD_DIR,
+        { recursive: true }
+    );
+
+    for (let index = 0; index < draft.images.length; index++) {
+        const image = draft.images[index];
+        if (!image.needsUpload || image.localPath) continue;
+
+        const response = await fetch(image.url);
+        if (!response.ok) {
+            throw new Error(`Could not save picture ${index + 1} for scheduling.`);
+        }
+
+        const localPath = path.join(
+            MESSAGE_UPLOAD_DIR,
+            `scheduled-${draft.id}-${index + 1}.${fileExtension(image)}`
+        );
+
+        await fs.promises.writeFile(
+            localPath,
+            Buffer.from(await response.arrayBuffer())
+        );
+
+        image.localPath = localPath;
+    }
+}
+
+async function processScheduledMessages() {
+    const now = Date.now();
+
+    for (const [draftId, storedDraft] of Object.entries(messageStore.scheduled)) {
+        if (!storedDraft.scheduleAt || storedDraft.scheduleAt > now) continue;
+        if (storedDraft.nextAttemptAt && storedDraft.nextAttemptAt > now) continue;
+
+        try {
+            await deliverMessageDraft(storedDraft);
+            delete messageStore.scheduled[draftId];
+            saveMessageStore();
+        } catch (error) {
+            console.error(
+                `Scheduled message ${draftId} failed:`,
+                error.message
+            );
+
+            storedDraft.attempts = (storedDraft.attempts || 0) + 1;
+            storedDraft.nextAttemptAt = Date.now() + 5 * 60_000;
+
+            if (storedDraft.attempts >= 3) {
+                storedDraft.failed = true;
+                storedDraft.nextAttemptAt = Date.now() + 24 * 60 * 60_000;
+            }
+
+            saveMessageStore();
+        }
+    }
+}
+
+function parseMessageReference(rawValue, explicitChannelId, fallbackChannelId) {
+    const ids = String(rawValue || "").match(/\d{17,20}/g) || [];
+    const messageId = ids.at(-1);
+    const linkedChannelId = ids.length >= 2 ? ids.at(-2) : null;
+
+    return {
+        messageId,
+        linkedChannelId,
+        channelId:
+            explicitChannelId ||
+            linkedChannelId ||
+            fallbackChannelId
+    };
 }
 
 function isStaffMember(member) {
@@ -472,7 +1346,74 @@ const commands = [
 
     new SlashCommandBuilder()
         .setName("msg")
-        .setDescription("Open the SAM STUDIO message builder"),
+        .setDescription("Open the SAM STUDIO message builder")
+        .addStringOption(o =>
+            o.setName("template")
+                .setDescription("Optional ready-made message template")
+                .setRequired(false)
+                .addChoices(
+                    { name: "Blank", value: "blank" },
+                    { name: "Script Release", value: "script_release" },
+                    { name: "Script Update", value: "update" },
+                    { name: "Sale", value: "sale" },
+                    { name: "Announcement", value: "announcement" },
+                    { name: "Partnership", value: "partnership" }
+                )
+        ),
+
+    new SlashCommandBuilder()
+        .setName("editmsg")
+        .setDescription("Edit a message sent by the SAM message builder")
+        .addStringOption(o =>
+            o.setName("message_id")
+                .setDescription("Message ID or message link")
+                .setRequired(true)
+        )
+        .addChannelOption(o =>
+            o.setName("channel")
+                .setDescription("Message channel (optional)")
+                .setRequired(false)
+                .addChannelTypes(
+                    ChannelType.GuildText,
+                    ChannelType.GuildAnnouncement
+                )
+        ),
+
+    new SlashCommandBuilder()
+        .setName("copymsg")
+        .setDescription("Duplicate a message sent by the SAM message builder")
+        .addStringOption(o =>
+            o.setName("message_id")
+                .setDescription("Message ID or message link")
+                .setRequired(true)
+        )
+        .addChannelOption(o =>
+            o.setName("channel")
+                .setDescription("Original message channel (optional)")
+                .setRequired(false)
+                .addChannelTypes(
+                    ChannelType.GuildText,
+                    ChannelType.GuildAnnouncement
+                )
+        ),
+
+    new SlashCommandBuilder()
+        .setName("deletemsg")
+        .setDescription("Delete a message sent by this bot")
+        .addStringOption(o =>
+            o.setName("message_id")
+                .setDescription("Message ID or message link")
+                .setRequired(true)
+        )
+        .addChannelOption(o =>
+            o.setName("channel")
+                .setDescription("Message channel (optional)")
+                .setRequired(false)
+                .addChannelTypes(
+                    ChannelType.GuildText,
+                    ChannelType.GuildAnnouncement
+                )
+        ),
 
     new SlashCommandBuilder()
         .setName("serverinfo")
@@ -626,6 +1567,23 @@ client.once(
 
             } catch (e) {}
         }
+
+        await processScheduledMessages();
+
+        setInterval(
+            processScheduledMessages,
+            30_000
+        );
+
+        setInterval(() => {
+            const expiry = Date.now() - 30 * 60_000;
+
+            for (const [draftId, draft] of messageDrafts) {
+                if (draft.updatedAt < expiry) {
+                    messageDrafts.delete(draftId);
+                }
+            }
+        }, 5 * 60_000);
     }
 );
 
@@ -1341,195 +2299,150 @@ client.on(
 
                 // ================= MSG =================
 
-                if (cmd === "msg") {
-
-                    if (
-                        !interaction.member.permissions.has(
-                            PermissionsBitField.Flags.ManageMessages
-                        )
-                    ) {
-
+                if (["msg", "editmsg", "copymsg", "deletemsg"].includes(cmd)) {
+                    if (!hasMessageBuilderPermission(interaction.member)) {
                         return interaction.reply({
-                            content:
-                                "No Permission!",
-                            flags:
-                                MessageFlags.Ephemeral
+                            content: "No Permission!",
+                            flags: MessageFlags.Ephemeral
                         });
                     }
 
                     if (
                         !LabelBuilder ||
                         !FileUploadBuilder ||
-                        typeof ModalBuilder.prototype
-                            .addLabelComponents !== "function"
+                        !ChannelSelectMenuBuilder ||
+                        typeof ModalBuilder.prototype.addLabelComponents !== "function"
                     ) {
-
                         return interaction.reply({
                             content:
-                                "❌ New message form requires the latest discord.js. Run: npm install discord.js@latest",
-                            flags:
-                                MessageFlags.Ephemeral
+                                "❌ Advanced message builder requires discord.js 14.27.0 or newer. Run: npm install discord.js@latest",
+                            flags: MessageFlags.Ephemeral
                         });
                     }
 
-                    const modal =
-                        new ModalBuilder()
+                    if (cmd === "msg") {
+                        const templateName =
+                            interaction.options.getString("template") ||
+                            "blank";
+                        const draft = createMessageDraft({
+                            interaction,
+                            templateName
+                        });
 
-                            .setCustomId(
-                                "modal_msg_builder"
-                            )
+                        return interaction.showModal(
+                            buildMessageModal(draft)
+                        );
+                    }
 
-                            .setTitle(
-                                "SAM STUDIO Message Builder"
-                            );
-
-                    const channelInput =
-                        new TextInputBuilder()
-
-                            .setCustomId(
-                                "msg_channel_id"
-                            )
-
-                            .setPlaceholder(
-                                "Paste channel ID here"
-                            )
-
-                            .setStyle(
-                                TextInputStyle.Short
-                            )
-
-                            .setMaxLength(
-                                25
-                            )
-
-                            .setRequired(
-                                true
-                            );
-
-                    const titleInput =
-                        new TextInputBuilder()
-
-                            .setCustomId(
-                                "msg_title"
-                            )
-
-                            .setLabel(
-                                "Title"
-                            )
-
-                            .setPlaceholder(
-                                "Example: SAM Scale"
-                            )
-
-                            .setStyle(
-                                TextInputStyle.Short
-                            )
-
-                            .setMaxLength(
-                                200
-                            )
-
-                            .setRequired(
-                                false
-                            );
-
-                    const contentInput =
-                        new TextInputBuilder()
-
-                            .setCustomId(
-                                "msg_content"
-                            )
-
-                            .setLabel(
-                                "Full Message"
-                            )
-
-                            .setPlaceholder(
-                                "Write the complete product or announcement message here..."
-                            )
-
-                            .setStyle(
-                                TextInputStyle.Paragraph
-                            )
-
-                            .setMaxLength(
-                                3500
-                            )
-
-                            .setRequired(
-                                false
-                            );
-
-                    const buttonsInput =
-                        new TextInputBuilder()
-
-                            .setCustomId(
-                                "msg_buttons"
-                            )
-
-                            .setPlaceholder(
-                                "Shop | https://link.com\nVideo | https://youtube.com/..."
-                            )
-
-                            .setStyle(
-                                TextInputStyle.Paragraph
-                            )
-
-                            .setMaxLength(
-                                3000
-                            )
-
-                            .setRequired(
-                                false
-                            );
-
-                    const imageUpload =
-                        new FileUploadBuilder()
-
-                            .setCustomId(
-                                "msg_image"
-                            )
-
-                            .setMinValues(
-                                0
-                            )
-
-                            .setMaxValues(
-                                1
-                            )
-
-                            .setRequired(
-                                false
-                            );
-
-                    modal.addLabelComponents(
-
-                        new LabelBuilder()
-                            .setLabel("Destination Channel ID")
-                            .setDescription("Only this field is required.")
-                            .setTextInputComponent(channelInput),
-
-                        new LabelBuilder()
-                            .setLabel("Title (Optional)")
-                            .setTextInputComponent(titleInput),
-
-                        new LabelBuilder()
-                            .setLabel("Full Message (Optional)")
-                            .setTextInputComponent(contentInput),
-
-                        new LabelBuilder()
-                            .setLabel("Picture (Optional)")
-                            .setDescription("Upload one PNG, JPG, GIF, or WEBP image.")
-                            .setFileUploadComponent(imageUpload),
-
-                        new LabelBuilder()
-                            .setLabel("Custom Buttons (Optional)")
-                            .setDescription("One per line: Button Name | https://link")
-                            .setTextInputComponent(buttonsInput)
+                    const rawReference =
+                        interaction.options.getString("message_id");
+                    const chosenChannel =
+                        interaction.options.getChannel("channel");
+                    const reference = parseMessageReference(
+                        rawReference,
+                        chosenChannel?.id,
+                        interaction.channelId
                     );
 
+                    if (!reference.messageId) {
+                        return interaction.reply({
+                            content: "❌ Enter a valid message ID or message link.",
+                            flags: MessageFlags.Ephemeral
+                        });
+                    }
+
+                    if (cmd === "deletemsg") {
+                        const savedRecord =
+                            messageStore.messages[reference.messageId];
+                        const deletionChannelId =
+                            chosenChannel?.id ||
+                            reference.linkedChannelId ||
+                            savedRecord?.channelId ||
+                            interaction.channelId;
+                        const channel =
+                            interaction.guild.channels.cache.get(deletionChannelId) ||
+                            await interaction.guild.channels
+                                .fetch(deletionChannelId)
+                                .catch(() => null);
+                        const message = channel?.isTextBased()
+                            ? await channel.messages
+                                .fetch(reference.messageId)
+                                .catch(() => null)
+                            : null;
+
+                        if (!message || message.author.id !== client.user.id) {
+                            return interaction.reply({
+                                content: "❌ Bot message was not found in that channel.",
+                                flags: MessageFlags.Ephemeral
+                            });
+                        }
+
+                        await message.delete();
+                        delete messageStore.messages[reference.messageId];
+                        saveMessageStore();
+
+                        const log = new EmbedBuilder()
+                            .setColor("#E74C3C")
+                            .setTitle("Message Deleted")
+                            .addFields(
+                                {
+                                    name: "Staff",
+                                    value: `<@${interaction.user.id}>`,
+                                    inline: true
+                                },
+                                {
+                                    name: "Channel",
+                                    value: `<#${deletionChannelId}>`,
+                                    inline: true
+                                },
+                                {
+                                    name: "Message ID",
+                                    value: reference.messageId
+                                }
+                            )
+                            .setTimestamp();
+
+                        await sendLog(
+                            interaction.guild,
+                            LOG_CHANNELS.MSG,
+                            log
+                        );
+
+                        return interaction.reply({
+                            content: "✅ Message deleted.",
+                            flags: MessageFlags.Ephemeral
+                        });
+                    }
+
+                    const record = messageStore.messages[reference.messageId];
+                    if (!record || record.guildId !== interaction.guildId) {
+                        return interaction.reply({
+                            content:
+                                "❌ This message has no saved builder data. Only messages sent with the upgraded builder can be edited or copied.",
+                            flags: MessageFlags.Ephemeral
+                        });
+                    }
+
+                    const source = JSON.parse(JSON.stringify(record));
+                    source.channelId =
+                        cmd === "editmsg"
+                            ? record.channelId
+                            : chosenChannel?.id ||
+                                reference.linkedChannelId ||
+                                record.channelId;
+
+                    const draft = createMessageDraft({
+                        interaction,
+                        source,
+                        mode: cmd === "editmsg" ? "edit" : "new",
+                        messageId:
+                            cmd === "editmsg"
+                                ? reference.messageId
+                                : null
+                    });
+
                     return interaction.showModal(
-                        modal
+                        buildMessageModal(draft)
                     );
                 }
 
@@ -1885,314 +2798,205 @@ client.on(
                 interaction.isModalSubmit()
             ) {
 
-                // ================= MSG MODAL =================
+                // ============ ADVANCED MSG MAIN FORM ============
 
                 if (
-                    interaction.customId ===
-                    "modal_msg_builder"
+                    interaction.customId.startsWith(
+                        "msg_main_modal:"
+                    )
                 ) {
+                    if (!hasMessageBuilderPermission(interaction.member)) {
+                        return interaction.reply({
+                            content: "No Permission!",
+                            flags: MessageFlags.Ephemeral
+                        });
+                    }
+
+                    const draftId = interaction.customId.split(":")[1];
+                    const draft = getOwnedDraft(interaction, draftId);
+
+                    if (!draft) {
+                        return interaction.reply({
+                            content: "❌ This message draft expired. Run /msg again.",
+                            flags: MessageFlags.Ephemeral
+                        });
+                    }
+
+                    const selectedChannels =
+                        interaction.fields.getSelectedChannels("msg_channel");
+                    const selectedChannel = selectedChannels?.first?.();
+
+                    if (!selectedChannel) {
+                        return interaction.reply({
+                            content: "❌ Please select a destination channel.",
+                            flags: MessageFlags.Ephemeral
+                        });
+                    }
 
                     if (
-                        !interaction.member.permissions.has(
-                            PermissionsBitField.Flags.ManageMessages
-                        )
+                        draft.mode === "edit" &&
+                        draft.originalChannelId &&
+                        selectedChannel.id !== draft.originalChannelId
                     ) {
-
                         return interaction.reply({
                             content:
-                                "No Permission!",
-                            flags:
-                                MessageFlags.Ephemeral
+                                "❌ An existing message cannot be moved to another channel. Use Duplicate if you want to send a copy elsewhere.",
+                            flags: MessageFlags.Ephemeral
                         });
                     }
 
-                    const rawChannelId =
-                        interaction.fields.getTextInputValue(
-                            "msg_channel_id"
-                        );
+                    const title = interaction.fields
+                        .getTextInputValue("msg_title")
+                        .trim();
+                    const content = interaction.fields
+                        .getTextInputValue("msg_content")
+                        .trim();
+                    const rawButtons = interaction.fields
+                        .getTextInputValue("msg_buttons")
+                        .trim();
 
-                    const channelId =
-                        rawChannelId.replace(
-                            /[<#>\s]/g,
-                            ""
-                        );
-
-                    const title =
-                        interaction.fields.getTextInputValue(
-                            "msg_title"
-                        ).trim();
-
-                    const content =
-                        interaction.fields.getTextInputValue(
-                            "msg_content"
-                        ).trim();
-
-                    const rawButtons =
-                        interaction.fields.getTextInputValue(
-                            "msg_buttons"
-                        ).trim();
-
-                    let buttonData;
-
+                    let buttons;
                     try {
-                        buttonData =
-                            parseMessageButtons(
-                                rawButtons
-                            );
+                        buttons = parseMessageButtons(rawButtons);
                     } catch (error) {
-
                         return interaction.reply({
-                            content:
-                                `❌ ${error.message}`,
-                            flags:
-                                MessageFlags.Ephemeral
+                            content: `❌ ${error.message}`,
+                            flags: MessageFlags.Ephemeral
                         });
                     }
 
-                    let image = null;
-
+                    let uploadedImages = [];
                     try {
-                        const uploadedFiles =
-                            interaction.fields.getUploadedFiles(
-                                "msg_image"
-                            );
-
-                        image =
-                            uploadedFiles?.first?.() ||
-                            null;
-
+                        const uploaded =
+                            interaction.fields.getUploadedFiles("msg_images");
+                        uploadedImages = uploaded
+                            ? Array.from(uploaded.values())
+                            : [];
                     } catch (error) {
-
                         return interaction.reply({
                             content:
-                                "❌ Image form requires the latest discord.js. Run: npm install discord.js@latest",
-                            flags:
-                                MessageFlags.Ephemeral
+                                "❌ Picture upload requires discord.js 14.27.0 or newer.",
+                            flags: MessageFlags.Ephemeral
                         });
                     }
 
-                    if (
-                        image &&
+                    const invalidImage = uploadedImages.find(image =>
                         !image.contentType?.startsWith("image/") &&
                         !/\.(png|jpe?g|gif|webp)$/i.test(image.name || "")
-                    ) {
+                    );
 
+                    if (invalidImage) {
                         return interaction.reply({
                             content:
-                                "❌ Please upload a PNG, JPG, GIF, or WEBP image.",
-                            flags:
-                                MessageFlags.Ephemeral
+                                "❌ Only PNG, JPG, GIF, or WEBP pictures are allowed.",
+                            flags: MessageFlags.Ephemeral
                         });
                     }
 
-                    await interaction.deferReply({
-                        flags:
-                            MessageFlags.Ephemeral
-                    });
+                    draft.channelId = selectedChannel.id;
+                    draft.title = title;
+                    draft.content = content;
+                    draft.buttons = buttons;
 
-                    const channel =
-                        interaction.guild.channels.cache.get(
-                            channelId
-                        ) ||
-                        await interaction.guild.channels
-                            .fetch(channelId)
-                            .catch(() => null);
-
-                    if (
-                        !channel ||
-                        !channel.isTextBased() ||
-                        typeof channel.send !== "function"
-                    ) {
-
-                        return interaction.editReply(
-                            "❌ Channel was not found or I cannot send messages there."
-                        );
+                    if (uploadedImages.length) {
+                        draft.images = uploadedImages.map(image => ({
+                            url: image.url,
+                            name: image.name,
+                            contentType: image.contentType || null,
+                            needsUpload: true
+                        }));
+                        draft.clearExistingAttachments = true;
                     }
 
-                    if (
-                        !ContainerBuilder ||
-                        !TextDisplayBuilder ||
-                        !MediaGalleryBuilder ||
-                        !SeparatorBuilder ||
-                        !SeparatorSpacingSize ||
-                        MessageFlags.IsComponentsV2 === undefined
-                    ) {
-
-                        return interaction.editReply(
-                            "❌ Full clean layout requires the latest discord.js. Run: npm install discord.js@latest"
-                        );
-                    }
-
-                    const linkButtons =
-                        buttonData.map(button =>
-                            new ButtonBuilder()
-                                .setLabel(button.label)
-                                .setStyle(ButtonStyle.Link)
-                                .setURL(button.url)
-                        );
-
-                    const displayParts = [];
-
-                    if (title) {
-                        displayParts.push(
-                            `## ⚡ ${title}`
-                        );
-                    }
-
-                    if (content) {
-                        displayParts.push(
-                            content
-                        );
-                    }
-
-                    if (displayParts.length === 0) {
-                        displayParts.push(
-                            "## ⚡ SAM STUDIO"
-                        );
-                    }
-
-                    const container =
-                        new ContainerBuilder()
-
-                            .setAccentColor(
-                                0x8B0000
-                            )
-
-                            .addTextDisplayComponents(
-                                new TextDisplayBuilder()
-                                    .setContent(
-                                        displayParts.join(
-                                            "\n\n"
-                                        )
-                                    )
-                            );
-
-                    let attachmentName = null;
-
-                    if (image) {
-
-                        const extensionMatch =
-                            (image.name || "")
-                                .match(/\.(png|jpe?g|gif|webp)$/i);
-
-                        const mimeExtensions = {
-                            "image/png": "png",
-                            "image/jpeg": "jpg",
-                            "image/gif": "gif",
-                            "image/webp": "webp"
-                        };
-
-                        const extension =
-                            extensionMatch?.[1]
-                                ?.toLowerCase()
-                                ?.replace("jpeg", "jpg") ||
-                            mimeExtensions[image.contentType] ||
-                            "png";
-
-                        attachmentName =
-                            `sam-message-${interaction.id}.${extension}`;
-
-                        container
-
-                            .addSeparatorComponents(
-                                new SeparatorBuilder()
-                                    .setDivider(true)
-                                    .setSpacing(
-                                        SeparatorSpacingSize.Small
-                                    )
-                            )
-
-                            .addMediaGalleryComponents(
-                                new MediaGalleryBuilder()
-                                    .addItems(item =>
-                                        item
-                                            .setURL(
-                                                `attachment://${attachmentName}`
-                                            )
-                                            .setDescription(
-                                                `${title || "SAM STUDIO"} image`
-                                            )
-                                    )
-                            )
-
-                            .addSeparatorComponents(
-                                new SeparatorBuilder()
-                                    .setDivider(true)
-                                    .setSpacing(
-                                        SeparatorSpacingSize.Small
-                                    )
-                            );
-                    }
-
-                    if (linkButtons.length > 0) {
-
-                        if (!image) {
-                            container.addSeparatorComponents(
-                                new SeparatorBuilder()
-                                    .setDivider(true)
-                                    .setSpacing(
-                                        SeparatorSpacingSize.Small
-                                    )
-                            );
-                        }
-
-                        container.addActionRowComponents(
-                            new ActionRowBuilder()
-                                .addComponents(
-                                    linkButtons
-                                )
-                        );
-                    }
-
-                    const payload = {
-                        components: [
-                            container
-                        ],
-                        flags:
-                            MessageFlags.IsComponentsV2
-                    };
-
-                    if (
-                        image &&
-                        attachmentName
-                    ) {
-                        payload.files = [
-                            {
-                                attachment:
-                                    image.url,
-                                name:
-                                    attachmentName
-                            }
-                        ];
-                    }
-
-                    let sentMessage;
+                    draft.updatedAt = Date.now();
 
                     try {
-                        sentMessage =
-                            await channel.send(
-                                payload
-                            );
+                        await getDraftChannel(draft);
                     } catch (error) {
+                        return interaction.reply({
+                            content: `❌ ${error.message}`,
+                            flags: MessageFlags.Ephemeral
+                        });
+                    }
 
-                        console.error(
-                            "Unable to send /msg message:",
-                            error
-                        );
-
-                        return interaction.editReply(
-                            "❌ Message could not be sent. Check my channel permissions and the supplied links/image."
+                    if (
+                        typeof interaction.isFromMessage === "function" &&
+                        interaction.isFromMessage()
+                    ) {
+                        return interaction.update(
+                            buildDraftPreview(draft, false)
                         );
                     }
 
-                    for (const emoji of ["❤️", "🔥", "😊"]) {
-                        await sentMessage.react(emoji).catch(() => {});
-                    }
-
-                    return interaction.editReply(
-                        `✅ Clean message sent in ${channel}!`
+                    return interaction.reply(
+                        buildDraftPreview(draft, true)
                     );
                 }
+
+                // ========== ADVANCED MSG SETTINGS FORM ==========
+
+                if (
+                    interaction.customId.startsWith(
+                        "msg_advanced_modal:"
+                    )
+                ) {
+                    if (!hasMessageBuilderPermission(interaction.member)) {
+                        return interaction.reply({
+                            content: "No Permission!",
+                            flags: MessageFlags.Ephemeral
+                        });
+                    }
+
+                    const draftId = interaction.customId.split(":")[1];
+                    const draft = getOwnedDraft(interaction, draftId);
+
+                    if (!draft) {
+                        return interaction.reply({
+                            content: "❌ This message draft expired. Run /msg again.",
+                            flags: MessageFlags.Ephemeral
+                        });
+                    }
+
+                    try {
+                        draft.accentColor = parseAccentColor(
+                            interaction.fields.getTextInputValue("msg_color")
+                        );
+                        draft.footer = interaction.fields
+                            .getTextInputValue("msg_footer")
+                            .trim();
+                        draft.ping = parseMessagePing(
+                            interaction.fields.getTextInputValue("msg_ping"),
+                            interaction.guild
+                        );
+                        draft.reactions = parseMessageReactions(
+                            interaction.fields.getTextInputValue("msg_reactions")
+                        );
+                        draft.scheduleAt = parseMessageSchedule(
+                            interaction.fields.getTextInputValue("msg_schedule")
+                        );
+                    } catch (error) {
+                        return interaction.reply({
+                            content: `❌ ${error.message}`,
+                            flags: MessageFlags.Ephemeral
+                        });
+                    }
+
+                    draft.updatedAt = Date.now();
+
+                    if (
+                        typeof interaction.isFromMessage === "function" &&
+                        interaction.isFromMessage()
+                    ) {
+                        return interaction.update(
+                            buildDraftPreview(draft, false)
+                        );
+                    }
+
+                    return interaction.reply(
+                        buildDraftPreview(draft, true)
+                    );
+                }
+
 
                 // ================= TICKET MODAL =================
 
@@ -2604,6 +3408,142 @@ client.on(
             if (
                 interaction.isButton()
             ) {
+
+                // ============== MSG PREVIEW BUTTONS ==============
+
+                if (interaction.customId.startsWith("msg_")) {
+                    if (!hasMessageBuilderPermission(interaction.member)) {
+                        return interaction.reply({
+                            content: "No Permission!",
+                            flags: MessageFlags.Ephemeral
+                        });
+                    }
+
+                    const separatorIndex = interaction.customId.indexOf(":");
+                    const action = separatorIndex === -1
+                        ? interaction.customId
+                        : interaction.customId.slice(0, separatorIndex);
+                    const draftId = separatorIndex === -1
+                        ? ""
+                        : interaction.customId.slice(separatorIndex + 1);
+                    const draft = getOwnedDraft(interaction, draftId);
+
+                    if (!draft) {
+                        return interaction.reply({
+                            content: "❌ This message draft expired. Run /msg again.",
+                            flags: MessageFlags.Ephemeral
+                        });
+                    }
+
+                    if (action === "msg_edit") {
+                        return interaction.showModal(
+                            buildMessageModal(draft)
+                        );
+                    }
+
+                    if (action === "msg_advanced") {
+                        return interaction.showModal(
+                            buildAdvancedMessageModal(draft)
+                        );
+                    }
+
+                    if (action === "msg_copy") {
+                        const copiedSource = JSON.parse(JSON.stringify(draft));
+                        copiedSource.scheduleAt = null;
+
+                        const copiedDraft = createMessageDraft({
+                            interaction,
+                            source: copiedSource,
+                            mode: "new",
+                            messageId: null
+                        });
+
+                        return interaction.showModal(
+                            buildMessageModal(copiedDraft)
+                        );
+                    }
+
+                    if (action === "msg_clear_images") {
+                        draft.images = [];
+                        draft.clearExistingAttachments = true;
+                        draft.updatedAt = Date.now();
+
+                        return interaction.update(
+                            buildDraftPreview(draft, false)
+                        );
+                    }
+
+                    if (action === "msg_cancel") {
+                        messageDrafts.delete(draft.id);
+
+                        return interaction.update({
+                            components: [
+                                new TextDisplayBuilder().setContent(
+                                    "❌ Message draft cancelled. Nothing was sent."
+                                )
+                            ]
+                        });
+                    }
+
+                    if (action === "msg_send") {
+                        await interaction.deferUpdate();
+
+                        try {
+                            if (draft.scheduleAt) {
+                                await cacheScheduledImages(draft);
+
+                                messageStore.scheduled[draft.id] =
+                                    JSON.parse(JSON.stringify(draft));
+                                saveMessageStore();
+                                messageDrafts.delete(draft.id);
+
+                                return interaction.editReply({
+                                    components: [
+                                        new TextDisplayBuilder().setContent(
+                                            `✅ Message scheduled for <t:${Math.floor(draft.scheduleAt / 1000)}:F> in <#${draft.channelId}>.`
+                                        )
+                                    ]
+                                });
+                            }
+
+                            const sentMessage =
+                                await deliverMessageDraft(draft);
+                            messageDrafts.delete(draft.id);
+
+                            return interaction.editReply({
+                                components: [
+                                    new TextDisplayBuilder().setContent(
+                                        `✅ Message ${draft.mode === "edit" ? "updated" : "sent"} in <#${sentMessage.channelId}>. [Open Message](${sentMessage.url})`
+                                    )
+                                ]
+                            });
+                        } catch (error) {
+                            console.error(
+                                "SAM message delivery failed:",
+                                error
+                            );
+
+                            return interaction.editReply({
+                                components: [
+                                    new TextDisplayBuilder().setContent(
+                                        `❌ ${error.message || "Message could not be sent."}`
+                                    ),
+                                    new ActionRowBuilder().addComponents(
+                                        new ButtonBuilder()
+                                            .setCustomId(`msg_edit:${draft.id}`)
+                                            .setLabel("Back to Edit")
+                                            .setEmoji("✏️")
+                                            .setStyle(ButtonStyle.Primary),
+                                        new ButtonBuilder()
+                                            .setCustomId(`msg_cancel:${draft.id}`)
+                                            .setLabel("Cancel")
+                                            .setStyle(ButtonStyle.Danger)
+                                    )
+                                ]
+                            });
+                        }
+                    }
+                }
 
                 // =================================================
                 // CLAIM
