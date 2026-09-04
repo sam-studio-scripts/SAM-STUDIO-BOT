@@ -25,11 +25,23 @@ const {
     SeparatorBuilder,
     SeparatorSpacingSize,
     LabelBuilder,
-    FileUploadBuilder
+    FileUploadBuilder,
+    AttachmentBuilder
 } = require("discord.js");
 const fs = require("fs");
 const path = require("path");
 const http = require("http");
+const {
+    createCanvas,
+    loadImage
+} = require("@napi-rs/canvas");
+
+const WELCOME_IMAGE_PATH = path.join(
+    __dirname,
+    "SAM-STUDIO.png"
+);
+
+let welcomeTemplatePromise = null;
 
 // ================= CONFIG & ENV =================
 const TOKEN = process.env.TOKEN;
@@ -255,6 +267,101 @@ async function sendLog(guild, channelId, embed) {
             embeds: [embed]
         }).catch(() => {});
     }
+}
+
+function getWelcomeTemplate() {
+    if (!welcomeTemplatePromise) {
+        welcomeTemplatePromise =
+            loadImage(
+                WELCOME_IMAGE_PATH
+            ).catch(error => {
+                welcomeTemplatePromise = null;
+                throw error;
+            });
+    }
+
+    return welcomeTemplatePromise;
+}
+
+async function makeWelcomeImage(member) {
+    const [background, avatar] =
+        await Promise.all([
+            getWelcomeTemplate(),
+            loadImage(
+                member.displayAvatarURL({
+                    extension: "png",
+                    size: 512,
+                    forceStatic: true
+                })
+            )
+        ]);
+
+    const canvas = createCanvas(
+        background.width,
+        background.height
+    );
+
+    const context = canvas.getContext("2d");
+
+    context.drawImage(
+        background,
+        0,
+        0,
+        canvas.width,
+        canvas.height
+    );
+
+    // Coordinates measured from the original 2172 x 724 template.
+    const scaleX =
+        canvas.width / 2172;
+    const scaleY =
+        canvas.height / 724;
+    const centerX =
+        1822 * scaleX;
+    const centerY =
+        361.5 * scaleY;
+    const radiusX =
+        210.5 * scaleX;
+    const radiusY =
+        210.5 * scaleY;
+
+    context.save();
+    context.beginPath();
+    context.ellipse(
+        centerX,
+        centerY,
+        radiusX,
+        radiusY,
+        0,
+        0,
+        Math.PI * 2
+    );
+    context.closePath();
+    context.clip();
+
+    const targetWidth =
+        radiusX * 2;
+    const targetHeight =
+        radiusY * 2;
+    const avatarScale = Math.max(
+        targetWidth / avatar.width,
+        targetHeight / avatar.height
+    );
+    const drawWidth =
+        avatar.width * avatarScale;
+    const drawHeight =
+        avatar.height * avatarScale;
+
+    context.drawImage(
+        avatar,
+        centerX - drawWidth / 2,
+        centerY - drawHeight / 2,
+        drawWidth,
+        drawHeight
+    );
+    context.restore();
+
+    return canvas.encode("png");
 }
 
 function isValidHttpUrl(value) {
@@ -4728,17 +4835,6 @@ client.on(
                             `Hey ${member}, glad you found us!\nWe are happy to welcome you to SAM STUDIO.`
                         )
 
-                        .setThumbnail(
-                            member.user.displayAvatarURL({
-                                dynamic:
-                                    true
-                            })
-                        )
-
-                        .setImage(
-                            "https://cdn.discordapp.com/attachments/1525436919557914655/1525446030529794089/ChatGPT_Image_Jul_11_2026_03_17_45_PM.png?ex=6a5369d3&is=6a521853&hm=6c54f6174190b7ed868ff6c83a27a5a56c978c1e92fcc271242e2e2118bc909d&"
-                        )
-
                         .setFooter({
                             text:
                                 "SAM STUDIO | 2026"
@@ -4746,13 +4842,66 @@ client.on(
 
                         .setTimestamp();
 
-                channel.send({
+                const payload = {
                     embeds: [
                         embed
                     ]
-                }).catch(
-                    () => {}
-                );
+                };
+
+                try {
+
+                    const welcomeBuffer =
+                        await makeWelcomeImage(
+                            member
+                        );
+
+                    const imageName =
+                        `sam-welcome-${member.id}.png`;
+
+                    const welcomeFile =
+                        new AttachmentBuilder(
+                            welcomeBuffer,
+                            {
+                                name:
+                                    imageName
+                            }
+                        );
+
+                    embed.setImage(
+                        `attachment://${imageName}`
+                    );
+
+                    payload.files = [
+                        welcomeFile
+                    ];
+
+                } catch (error) {
+
+                    console.error(
+                        `[WELCOME] Could not render image for ${member.user.tag}:`,
+                        error
+                    );
+
+                    embed.setThumbnail(
+                        member.displayAvatarURL({
+                            extension:
+                                "png",
+                            size:
+                                256,
+                            forceStatic:
+                                true
+                        })
+                    );
+                }
+
+                await channel.send(
+                    payload
+                ).catch(error => {
+                    console.error(
+                        "[WELCOME] Could not send welcome message:",
+                        error
+                    );
+                });
             }
         }
 
