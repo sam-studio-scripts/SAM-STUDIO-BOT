@@ -4820,32 +4820,16 @@ client.on(
 
             if (channel) {
 
-                const embed =
-                    new EmbedBuilder()
-
-                        .setTitle(
-                            "Welcome to SAM STUDIO | 2026!"
-                        )
-
-                        .setColor(
-                            0x8B00FF
-                        )
-
-                        .setDescription(
-                            `Hey ${member}, glad you found us!\nWe are happy to welcome you to SAM STUDIO.`
-                        )
-
-                        .setFooter({
-                            text:
-                                "SAM STUDIO | 2026"
-                        })
-
-                        .setTimestamp();
-
                 const payload = {
-                    embeds: [
-                        embed
-                    ]
+                    content:
+                        `Welcome ${member} to **SAM STUDIO**!`,
+                    allowedMentions: {
+                        parse: [],
+                        users: [
+                            member.id
+                        ],
+                        roles: []
+                    }
                 };
 
                 try {
@@ -4867,10 +4851,6 @@ client.on(
                             }
                         );
 
-                    embed.setImage(
-                        `attachment://${imageName}`
-                    );
-
                     payload.files = [
                         welcomeFile
                     ];
@@ -4882,16 +4862,6 @@ client.on(
                         error
                     );
 
-                    embed.setThumbnail(
-                        member.displayAvatarURL({
-                            extension:
-                                "png",
-                            size:
-                                256,
-                            forceStatic:
-                                true
-                        })
-                    );
                 }
 
                 await channel.send(
