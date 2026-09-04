@@ -26,11 +26,17 @@ const http = require("http");
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = "1536547186962333777";
 const PANEL_CHANNEL_ID = "1526597563736916028";
-const STAFF_ROLE_ID = "686569170330058753";
+const STAFF_ROLE_ID = "1526597468861763825";
+const LEGACY_STAFF_ROLE_ID = "686569170330058753";
 const VERIFIED_ROLE_ID = "1526597473970294914";
 const WELCOME_CHANNEL_ID = "1526597511228166267";
 const GOODBYE_CHANNEL_ID = "1536548597078691950";
 const CLOSED_CATEGORY_ID = "1544914321090543626";
+
+// Optional defaults for /msg link buttons.
+// Add TEBEX_URL and YOUTUBE_URL to .env once, or provide the links in /msg.
+const DEFAULT_TEBEX_URL = process.env.TEBEX_URL || "";
+const DEFAULT_YOUTUBE_URL = process.env.YOUTUBE_URL || "";
 
 // Log Channels
 const LOG_CHANNELS = {
@@ -97,6 +103,7 @@ let antiLinkChannels = new Set();
 let antiMentionChannels = new Set();
 let activeGiveaways = new Map();
 let invites = new Map();
+const pendingMsgEmbeds = new Map();
 
 // ================= ANTI PING =================
 const ANTI_PING_MEMBERS = new Set();
@@ -134,6 +141,65 @@ async function sendLog(guild, channelId, embed) {
             embeds: [embed]
         }).catch(() => {});
     }
+}
+
+function isValidHttpUrl(value) {
+    if (!value) return false;
+
+    try {
+        const url = new URL(value);
+        return url.protocol === "https:" || url.protocol === "http:";
+    } catch (e) {
+        return false;
+    }
+}
+
+function isStaffMember(member) {
+    return Boolean(
+        member?.roles?.cache?.has(STAFF_ROLE_ID) ||
+        member?.permissions?.has(
+            PermissionsBitField.Flags.Administrator
+        )
+    );
+}
+
+async function syncTicketStaffPermissions(guild) {
+    const ticketChannels =
+        guild.channels.cache.filter(channel =>
+            channel.type === ChannelType.GuildText &&
+            channel.topic?.includes("sam-ticket-user:")
+        );
+
+    for (const [, channel] of ticketChannels) {
+        await channel.permissionOverwrites.edit(
+            STAFF_ROLE_ID,
+            {
+                ViewChannel: true,
+                SendMessages: true,
+                ReadMessageHistory: true,
+                AttachFiles: true,
+                EmbedLinks: true
+            }
+        ).catch(error => {
+            console.error(
+                `Could not update staff access for ${channel.name}:`,
+                error.message
+            );
+        });
+
+        if (
+            LEGACY_STAFF_ROLE_ID &&
+            LEGACY_STAFF_ROLE_ID !== STAFF_ROLE_ID
+        ) {
+            await channel.permissionOverwrites
+                .delete(LEGACY_STAFF_ROLE_ID)
+                .catch(() => {});
+        }
+    }
+
+    console.log(
+        `Ticket staff permissions synced for ${ticketChannels.size} channel(s) ✅`
+    );
 }
 
 // ================= TIME PARSER =================
@@ -364,11 +430,26 @@ const commands = [
 
     new SlashCommandBuilder()
         .setName("msg")
-        .setDescription("Send formatted embed message")
+        .setDescription("Send a clean SAM STUDIO embed")
         .addStringOption(o =>
             o.setName("channel_id")
-                .setDescription("Channel ID")
+                .setDescription("ID of the channel where the message will be sent")
                 .setRequired(true)
+        )
+        .addAttachmentOption(o =>
+            o.setName("image")
+                .setDescription("Upload the large embed image")
+                .setRequired(false)
+        )
+        .addStringOption(o =>
+            o.setName("tebex_url")
+                .setDescription("Tebex store link (or set TEBEX_URL in .env)")
+                .setRequired(false)
+        )
+        .addStringOption(o =>
+            o.setName("youtube_url")
+                .setDescription("YouTube link (or set YOUTUBE_URL in .env)")
+                .setRequired(false)
         ),
 
     new SlashCommandBuilder()
@@ -499,6 +580,10 @@ client.once(
             client.guilds.cache.first();
 
         if (guild) {
+
+            await syncTicketStaffPermissions(
+                guild
+            );
 
             try {
 
@@ -1255,18 +1340,148 @@ client.on(
                             "channel_id"
                         );
 
+                    const channel =
+                        interaction.guild.channels.cache.get(
+                            channelId
+                        ) ||
+                        await interaction.guild.channels
+                            .fetch(channelId)
+                            .catch(() => null);
+
+                    if (
+                        !channel ||
+                        !channel.isTextBased() ||
+                        typeof channel.send !== "function"
+                    ) {
+
+                        return interaction.reply({
+                            content:
+                                "❌ Invalid channel ID or I cannot send messages there.",
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
+                    }
+
+                    const image =
+                        interaction.options.getAttachment(
+                            "image"
+                        );
+
+                    if (
+                        image &&
+                        !image.contentType?.startsWith("image/") &&
+                        !/\.(png|jpe?g|gif|webp)$/i.test(image.name || "")
+                    ) {
+
+                        return interaction.reply({
+                            content:
+                                "❌ Please upload a PNG, JPG, GIF, or WEBP image.",
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
+                    }
+
+                    const tebexUrl =
+                        interaction.options.getString(
+                            "tebex_url"
+                        ) ||
+                        DEFAULT_TEBEX_URL;
+
+                    const youtubeUrl =
+                        interaction.options.getString(
+                            "youtube_url"
+                        ) ||
+                        DEFAULT_YOUTUBE_URL;
+
+                    if (
+                        tebexUrl &&
+                        !isValidHttpUrl(tebexUrl)
+                    ) {
+
+                        return interaction.reply({
+                            content:
+                                "❌ Tebex URL must start with http:// or https://.",
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
+                    }
+
+                    if (
+                        youtubeUrl &&
+                        !isValidHttpUrl(youtubeUrl)
+                    ) {
+
+                        return interaction.reply({
+                            content:
+                                "❌ YouTube URL must start with http:// or https://.",
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
+                    }
+
+                    const requestId =
+                        interaction.id;
+
+                    pendingMsgEmbeds.set(
+                        requestId,
+                        {
+                            userId:
+                                interaction.user.id,
+                            guildId:
+                                interaction.guildId,
+                            channelId:
+                                channel.id,
+                            imageUrl:
+                                image?.url || null,
+                            tebexUrl,
+                            youtubeUrl
+                        }
+                    );
+
+                    setTimeout(
+                        () => pendingMsgEmbeds.delete(requestId),
+                        15 * 60 * 1000
+                    );
+
                     const modal =
                         new ModalBuilder()
 
                             .setCustomId(
-                                `modal_msg_${channelId}`
+                                `modal_msg_${requestId}`
                             )
 
                             .setTitle(
-                                "Send Message"
+                                "SAM STUDIO Message"
                             );
 
-                    const input =
+                    const titleInput =
+                        new TextInputBuilder()
+
+                            .setCustomId(
+                                "msg_title"
+                            )
+
+                            .setLabel(
+                                "Title"
+                            )
+
+                            .setPlaceholder(
+                                "Example: SAM Scale"
+                            )
+
+                            .setStyle(
+                                TextInputStyle.Short
+                            )
+
+                            .setMaxLength(
+                                250
+                            )
+
+                            .setRequired(
+                                true
+                            );
+
+                    const contentInput =
                         new TextInputBuilder()
 
                             .setCustomId(
@@ -1274,11 +1489,19 @@ client.on(
                             )
 
                             .setLabel(
-                                "Message Content"
+                                "Full Message"
+                            )
+
+                            .setPlaceholder(
+                                "Write the complete product or announcement message here..."
                             )
 
                             .setStyle(
                                 TextInputStyle.Paragraph
+                            )
+
+                            .setMaxLength(
+                                4000
                             )
 
                             .setRequired(
@@ -1289,7 +1512,12 @@ client.on(
 
                         new ActionRowBuilder()
                             .addComponents(
-                                input
+                                titleInput
+                            ),
+
+                        new ActionRowBuilder()
+                            .addComponents(
+                                contentInput
                             )
                     );
 
@@ -1658,10 +1886,38 @@ client.on(
                     )
                 ) {
 
-                    const chanId =
+                    const requestId =
                         interaction.customId.replace(
                             "modal_msg_",
                             ""
+                        );
+
+                    const pending =
+                        pendingMsgEmbeds.get(
+                            requestId
+                        );
+
+                    pendingMsgEmbeds.delete(
+                        requestId
+                    );
+
+                    if (
+                        !pending ||
+                        pending.userId !== interaction.user.id ||
+                        pending.guildId !== interaction.guildId
+                    ) {
+
+                        return interaction.reply({
+                            content:
+                                "❌ This message form expired. Please run /msg again.",
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
+                    }
+
+                    const title =
+                        interaction.fields.getTextInputValue(
+                            "msg_title"
                         );
 
                     const content =
@@ -1670,15 +1926,22 @@ client.on(
                         );
 
                     const channel =
-                        client.channels.cache.get(
-                            chanId
-                        );
+                        interaction.guild.channels.cache.get(
+                            pending.channelId
+                        ) ||
+                        await interaction.guild.channels
+                            .fetch(pending.channelId)
+                            .catch(() => null);
 
-                    if (!channel) {
+                    if (
+                        !channel ||
+                        !channel.isTextBased() ||
+                        typeof channel.send !== "function"
+                    ) {
 
                         return interaction.reply({
                             content:
-                                "Invalid Channel ID",
+                                "❌ Channel was not found or I cannot send messages there.",
                             flags:
                                 MessageFlags.Ephemeral
                         });
@@ -1688,22 +1951,75 @@ client.on(
                         new EmbedBuilder()
 
                             .setColor(
-                                "#8B0000"
+                                "#2B2D31"
+                            )
+
+                            .setTitle(
+                                `⚡ ${title}`
                             )
 
                             .setDescription(
                                 content
-                            );
+                            )
 
-                    await channel.send({
-                        embeds: [
-                            embed
-                        ]
-                    });
+                            .setFooter({
+                                text:
+                                    `SAM STUDIO • Sent by ${interaction.user.username}`
+                            })
+
+                            .setTimestamp();
+
+                    if (pending.imageUrl) {
+                        embed.setImage(
+                            pending.imageUrl
+                        );
+                    }
+
+                    const linkButtons = [];
+
+                    if (pending.tebexUrl) {
+                        linkButtons.push(
+                            new ButtonBuilder()
+                                .setLabel("Tebex")
+                                .setEmoji("💰")
+                                .setStyle(ButtonStyle.Link)
+                                .setURL(pending.tebexUrl)
+                        );
+                    }
+
+                    if (pending.youtubeUrl) {
+                        linkButtons.push(
+                            new ButtonBuilder()
+                                .setLabel("YouTube")
+                                .setEmoji("▶️")
+                                .setStyle(ButtonStyle.Link)
+                                .setURL(pending.youtubeUrl)
+                        );
+                    }
+
+                    const payload = {
+                        embeds: [embed]
+                    };
+
+                    if (linkButtons.length > 0) {
+                        payload.components = [
+                            new ActionRowBuilder()
+                                .addComponents(linkButtons)
+                        ];
+                    }
+
+                    const sentMessage =
+                        await channel.send(
+                            payload
+                        );
+
+                    for (const emoji of ["❤️", "🔥", "😊"]) {
+                        await sentMessage.react(emoji).catch(() => {});
+                    }
 
                     return interaction.reply({
                         content:
-                            "✅ Formatted message sent!",
+                            `✅ Clean message sent in ${channel}!`,
                         flags:
                             MessageFlags.Ephemeral
                     });
@@ -1799,7 +2115,9 @@ client.on(
                                 allow: [
                                     PermissionsBitField.Flags.ViewChannel,
                                     PermissionsBitField.Flags.SendMessages,
-                                    PermissionsBitField.Flags.ReadMessageHistory
+                                    PermissionsBitField.Flags.ReadMessageHistory,
+                                    PermissionsBitField.Flags.AttachFiles,
+                                    PermissionsBitField.Flags.EmbedLinks
                                 ]
                             }
                         ]
@@ -2128,8 +2446,8 @@ client.on(
                 ) {
 
                     if (
-                        !interaction.member.roles.cache.has(
-                            STAFF_ROLE_ID
+                        !isStaffMember(
+                            interaction.member
                         )
                     ) {
 
@@ -2195,6 +2513,20 @@ client.on(
                     interaction.customId ===
                     "close"
                 ) {
+
+                    if (
+                        !isStaffMember(
+                            interaction.member
+                        )
+                    ) {
+
+                        return interaction.reply({
+                            content:
+                                "Staff Only!",
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
+                    }
 
                     await interaction.deferReply({
                         flags:
@@ -2377,8 +2709,8 @@ client.on(
                 ) {
 
                     if (
-                        !interaction.member.roles.cache.has(
-                            STAFF_ROLE_ID
+                        !isStaffMember(
+                            interaction.member
                         )
                     ) {
 
@@ -2491,8 +2823,8 @@ client.on(
                 ) {
 
                     if (
-                        !interaction.member.roles.cache.has(
-                            STAFF_ROLE_ID
+                        !isStaffMember(
+                            interaction.member
                         )
                     ) {
 
