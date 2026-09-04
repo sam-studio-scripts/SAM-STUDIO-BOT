@@ -1,17 +1,20 @@
 {
-  "name": "sam-studio-discord-bot",
+  "name": "sam-studio-bot",
   "version": "1.0.0",
-  "description": "SAM STUDIO Discord Bot",
+  "private": true,
+  "description": "SAM STUDIO Discord bot",
   "main": "index.js",
+  "type": "commonjs",
   "scripts": {
-    "start": "node index.js"
-  },
-  "dependencies": {
-    "discord.js": "^14.16.3",
-    "dotenv": "^16.4.5"
+    "start": "node index.js",
+    "check": "node --check index.js"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=18"
   },
-  "license": "ISC"
+  "dependencies": {
+    "@napi-rs/canvas": "1.0.8",
+    "discord.js": "14.27.0",
+    "dotenv": "17.4.2"
+  }
 }
