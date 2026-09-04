@@ -17,7 +17,14 @@ const {
     Routes,
     SlashCommandBuilder,
     Events,
-    MessageFlags
+    MessageFlags,
+    ContainerBuilder,
+    TextDisplayBuilder,
+    MediaGalleryBuilder,
+    SeparatorBuilder,
+    SeparatorSpacingSize,
+    LabelBuilder,
+    FileUploadBuilder
 } = require("discord.js");
 const fs = require("fs");
 const http = require("http");
@@ -32,11 +39,6 @@ const VERIFIED_ROLE_ID = "1526597473970294914";
 const WELCOME_CHANNEL_ID = "1526597511228166267";
 const GOODBYE_CHANNEL_ID = "1536548597078691950";
 const CLOSED_CATEGORY_ID = "1544914321090543626";
-
-// Optional defaults for /msg link buttons.
-// Add TEBEX_URL and YOUTUBE_URL to .env once, or provide the links in /msg.
-const DEFAULT_TEBEX_URL = process.env.TEBEX_URL || "";
-const DEFAULT_YOUTUBE_URL = process.env.YOUTUBE_URL || "";
 
 // Log Channels
 const LOG_CHANNELS = {
@@ -103,7 +105,6 @@ let antiLinkChannels = new Set();
 let antiMentionChannels = new Set();
 let activeGiveaways = new Map();
 let invites = new Map();
-const pendingMsgEmbeds = new Map();
 
 // ================= ANTI PING =================
 const ANTI_PING_MEMBERS = new Set();
@@ -152,6 +153,47 @@ function isValidHttpUrl(value) {
     } catch (e) {
         return false;
     }
+}
+
+function parseMessageButtons(rawValue) {
+    const lines = String(rawValue || "")
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(Boolean);
+
+    if (lines.length > 5) {
+        throw new Error("Maximum 5 buttons are allowed.");
+    }
+
+    return lines.map((line, index) => {
+        const separatorIndex = line.indexOf("|");
+
+        if (separatorIndex === -1) {
+            throw new Error(
+                `Button ${index + 1}: use Button Name | https://link.com`
+            );
+        }
+
+        const label = line.slice(0, separatorIndex).trim();
+        const url = line.slice(separatorIndex + 1).trim();
+
+        if (!label || label.length > 80) {
+            throw new Error(
+                `Button ${index + 1}: name must be between 1 and 80 characters.`
+            );
+        }
+
+        if (!isValidHttpUrl(url) || url.length > 512) {
+            throw new Error(
+                `Button ${index + 1}: enter a valid http:// or https:// link.`
+            );
+        }
+
+        return {
+            label,
+            url
+        };
+    });
 }
 
 function isStaffMember(member) {
@@ -430,27 +472,7 @@ const commands = [
 
     new SlashCommandBuilder()
         .setName("msg")
-        .setDescription("Send a clean SAM STUDIO embed")
-        .addStringOption(o =>
-            o.setName("channel_id")
-                .setDescription("ID of the channel where the message will be sent")
-                .setRequired(true)
-        )
-        .addAttachmentOption(o =>
-            o.setName("image")
-                .setDescription("Upload the large embed image")
-                .setRequired(false)
-        )
-        .addStringOption(o =>
-            o.setName("tebex_url")
-                .setDescription("Tebex store link (or set TEBEX_URL in .env)")
-                .setRequired(false)
-        )
-        .addStringOption(o =>
-            o.setName("youtube_url")
-                .setDescription("YouTube link (or set YOUTUBE_URL in .env)")
-                .setRequired(false)
-        ),
+        .setDescription("Open the SAM STUDIO message builder"),
 
     new SlashCommandBuilder()
         .setName("serverinfo")
@@ -1335,123 +1357,53 @@ client.on(
                         });
                     }
 
-                    const channelId =
-                        interaction.options.getString(
-                            "channel_id"
-                        );
-
-                    const channel =
-                        interaction.guild.channels.cache.get(
-                            channelId
-                        ) ||
-                        await interaction.guild.channels
-                            .fetch(channelId)
-                            .catch(() => null);
-
                     if (
-                        !channel ||
-                        !channel.isTextBased() ||
-                        typeof channel.send !== "function"
+                        !LabelBuilder ||
+                        !FileUploadBuilder ||
+                        typeof ModalBuilder.prototype
+                            .addLabelComponents !== "function"
                     ) {
 
                         return interaction.reply({
                             content:
-                                "❌ Invalid channel ID or I cannot send messages there.",
+                                "❌ New message form requires the latest discord.js. Run: npm install discord.js@latest",
                             flags:
                                 MessageFlags.Ephemeral
                         });
                     }
-
-                    const image =
-                        interaction.options.getAttachment(
-                            "image"
-                        );
-
-                    if (
-                        image &&
-                        !image.contentType?.startsWith("image/") &&
-                        !/\.(png|jpe?g|gif|webp)$/i.test(image.name || "")
-                    ) {
-
-                        return interaction.reply({
-                            content:
-                                "❌ Please upload a PNG, JPG, GIF, or WEBP image.",
-                            flags:
-                                MessageFlags.Ephemeral
-                        });
-                    }
-
-                    const tebexUrl =
-                        interaction.options.getString(
-                            "tebex_url"
-                        ) ||
-                        DEFAULT_TEBEX_URL;
-
-                    const youtubeUrl =
-                        interaction.options.getString(
-                            "youtube_url"
-                        ) ||
-                        DEFAULT_YOUTUBE_URL;
-
-                    if (
-                        tebexUrl &&
-                        !isValidHttpUrl(tebexUrl)
-                    ) {
-
-                        return interaction.reply({
-                            content:
-                                "❌ Tebex URL must start with http:// or https://.",
-                            flags:
-                                MessageFlags.Ephemeral
-                        });
-                    }
-
-                    if (
-                        youtubeUrl &&
-                        !isValidHttpUrl(youtubeUrl)
-                    ) {
-
-                        return interaction.reply({
-                            content:
-                                "❌ YouTube URL must start with http:// or https://.",
-                            flags:
-                                MessageFlags.Ephemeral
-                        });
-                    }
-
-                    const requestId =
-                        interaction.id;
-
-                    pendingMsgEmbeds.set(
-                        requestId,
-                        {
-                            userId:
-                                interaction.user.id,
-                            guildId:
-                                interaction.guildId,
-                            channelId:
-                                channel.id,
-                            imageUrl:
-                                image?.url || null,
-                            tebexUrl,
-                            youtubeUrl
-                        }
-                    );
-
-                    setTimeout(
-                        () => pendingMsgEmbeds.delete(requestId),
-                        15 * 60 * 1000
-                    );
 
                     const modal =
                         new ModalBuilder()
 
                             .setCustomId(
-                                `modal_msg_${requestId}`
+                                "modal_msg_builder"
                             )
 
                             .setTitle(
-                                "SAM STUDIO Message"
+                                "SAM STUDIO Message Builder"
+                            );
+
+                    const channelInput =
+                        new TextInputBuilder()
+
+                            .setCustomId(
+                                "msg_channel_id"
+                            )
+
+                            .setPlaceholder(
+                                "Paste channel ID here"
+                            )
+
+                            .setStyle(
+                                TextInputStyle.Short
+                            )
+
+                            .setMaxLength(
+                                25
+                            )
+
+                            .setRequired(
+                                true
                             );
 
                     const titleInput =
@@ -1474,11 +1426,11 @@ client.on(
                             )
 
                             .setMaxLength(
-                                250
+                                200
                             )
 
                             .setRequired(
-                                true
+                                false
                             );
 
                     const contentInput =
@@ -1501,24 +1453,79 @@ client.on(
                             )
 
                             .setMaxLength(
-                                4000
+                                3500
                             )
 
                             .setRequired(
-                                true
+                                false
                             );
 
-                    modal.addComponents(
+                    const buttonsInput =
+                        new TextInputBuilder()
 
-                        new ActionRowBuilder()
-                            .addComponents(
-                                titleInput
-                            ),
-
-                        new ActionRowBuilder()
-                            .addComponents(
-                                contentInput
+                            .setCustomId(
+                                "msg_buttons"
                             )
+
+                            .setPlaceholder(
+                                "Shop | https://link.com\nVideo | https://youtube.com/..."
+                            )
+
+                            .setStyle(
+                                TextInputStyle.Paragraph
+                            )
+
+                            .setMaxLength(
+                                3000
+                            )
+
+                            .setRequired(
+                                false
+                            );
+
+                    const imageUpload =
+                        new FileUploadBuilder()
+
+                            .setCustomId(
+                                "msg_image"
+                            )
+
+                            .setMinValues(
+                                0
+                            )
+
+                            .setMaxValues(
+                                1
+                            )
+
+                            .setRequired(
+                                false
+                            );
+
+                    modal.addLabelComponents(
+
+                        new LabelBuilder()
+                            .setLabel("Destination Channel ID")
+                            .setDescription("Only this field is required.")
+                            .setTextInputComponent(channelInput),
+
+                        new LabelBuilder()
+                            .setLabel("Title (Optional)")
+                            .setTextInputComponent(titleInput),
+
+                        new LabelBuilder()
+                            .setLabel("Full Message (Optional)")
+                            .setTextInputComponent(contentInput),
+
+                        new LabelBuilder()
+                            .setLabel("Picture (Optional)")
+                            .setDescription("Upload one PNG, JPG, GIF, or WEBP image.")
+                            .setFileUploadComponent(imageUpload),
+
+                        new LabelBuilder()
+                            .setLabel("Custom Buttons (Optional)")
+                            .setDescription("One per line: Button Name | https://link")
+                            .setTextInputComponent(buttonsInput)
                     );
 
                     return interaction.showModal(
@@ -1881,56 +1888,114 @@ client.on(
                 // ================= MSG MODAL =================
 
                 if (
-                    interaction.customId.startsWith(
-                        "modal_msg_"
-                    )
+                    interaction.customId ===
+                    "modal_msg_builder"
                 ) {
 
-                    const requestId =
-                        interaction.customId.replace(
-                            "modal_msg_",
-                            ""
-                        );
-
-                    const pending =
-                        pendingMsgEmbeds.get(
-                            requestId
-                        );
-
-                    pendingMsgEmbeds.delete(
-                        requestId
-                    );
-
                     if (
-                        !pending ||
-                        pending.userId !== interaction.user.id ||
-                        pending.guildId !== interaction.guildId
+                        !interaction.member.permissions.has(
+                            PermissionsBitField.Flags.ManageMessages
+                        )
                     ) {
 
                         return interaction.reply({
                             content:
-                                "❌ This message form expired. Please run /msg again.",
+                                "No Permission!",
                             flags:
                                 MessageFlags.Ephemeral
                         });
                     }
 
+                    const rawChannelId =
+                        interaction.fields.getTextInputValue(
+                            "msg_channel_id"
+                        );
+
+                    const channelId =
+                        rawChannelId.replace(
+                            /[<#>\s]/g,
+                            ""
+                        );
+
                     const title =
                         interaction.fields.getTextInputValue(
                             "msg_title"
-                        );
+                        ).trim();
 
                     const content =
                         interaction.fields.getTextInputValue(
                             "msg_content"
-                        );
+                        ).trim();
+
+                    const rawButtons =
+                        interaction.fields.getTextInputValue(
+                            "msg_buttons"
+                        ).trim();
+
+                    let buttonData;
+
+                    try {
+                        buttonData =
+                            parseMessageButtons(
+                                rawButtons
+                            );
+                    } catch (error) {
+
+                        return interaction.reply({
+                            content:
+                                `❌ ${error.message}`,
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
+                    }
+
+                    let image = null;
+
+                    try {
+                        const uploadedFiles =
+                            interaction.fields.getUploadedFiles(
+                                "msg_image"
+                            );
+
+                        image =
+                            uploadedFiles?.first?.() ||
+                            null;
+
+                    } catch (error) {
+
+                        return interaction.reply({
+                            content:
+                                "❌ Image form requires the latest discord.js. Run: npm install discord.js@latest",
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
+                    }
+
+                    if (
+                        image &&
+                        !image.contentType?.startsWith("image/") &&
+                        !/\.(png|jpe?g|gif|webp)$/i.test(image.name || "")
+                    ) {
+
+                        return interaction.reply({
+                            content:
+                                "❌ Please upload a PNG, JPG, GIF, or WEBP image.",
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
+                    }
+
+                    await interaction.deferReply({
+                        flags:
+                            MessageFlags.Ephemeral
+                    });
 
                     const channel =
                         interaction.guild.channels.cache.get(
-                            pending.channelId
+                            channelId
                         ) ||
                         await interaction.guild.channels
-                            .fetch(pending.channelId)
+                            .fetch(channelId)
                             .catch(() => null);
 
                     if (
@@ -1939,90 +2004,194 @@ client.on(
                         typeof channel.send !== "function"
                     ) {
 
-                        return interaction.reply({
-                            content:
-                                "❌ Channel was not found or I cannot send messages there.",
-                            flags:
-                                MessageFlags.Ephemeral
-                        });
-                    }
-
-                    const embed =
-                        new EmbedBuilder()
-
-                            .setColor(
-                                "#2B2D31"
-                            )
-
-                            .setTitle(
-                                `⚡ ${title}`
-                            )
-
-                            .setDescription(
-                                content
-                            )
-
-                            .setFooter({
-                                text:
-                                    `SAM STUDIO • Sent by ${interaction.user.username}`
-                            })
-
-                            .setTimestamp();
-
-                    if (pending.imageUrl) {
-                        embed.setImage(
-                            pending.imageUrl
+                        return interaction.editReply(
+                            "❌ Channel was not found or I cannot send messages there."
                         );
                     }
 
-                    const linkButtons = [];
+                    if (
+                        !ContainerBuilder ||
+                        !TextDisplayBuilder ||
+                        !MediaGalleryBuilder ||
+                        !SeparatorBuilder ||
+                        !SeparatorSpacingSize ||
+                        MessageFlags.IsComponentsV2 === undefined
+                    ) {
 
-                    if (pending.tebexUrl) {
-                        linkButtons.push(
-                            new ButtonBuilder()
-                                .setLabel("Tebex")
-                                .setEmoji("💰")
-                                .setStyle(ButtonStyle.Link)
-                                .setURL(pending.tebexUrl)
+                        return interaction.editReply(
+                            "❌ Full clean layout requires the latest discord.js. Run: npm install discord.js@latest"
                         );
                     }
 
-                    if (pending.youtubeUrl) {
-                        linkButtons.push(
+                    const linkButtons =
+                        buttonData.map(button =>
                             new ButtonBuilder()
-                                .setLabel("YouTube")
-                                .setEmoji("▶️")
+                                .setLabel(button.label)
                                 .setStyle(ButtonStyle.Link)
-                                .setURL(pending.youtubeUrl)
+                                .setURL(button.url)
+                        );
+
+                    const displayParts = [];
+
+                    if (title) {
+                        displayParts.push(
+                            `## ⚡ ${title}`
+                        );
+                    }
+
+                    if (content) {
+                        displayParts.push(
+                            content
+                        );
+                    }
+
+                    if (displayParts.length === 0) {
+                        displayParts.push(
+                            "## ⚡ SAM STUDIO"
+                        );
+                    }
+
+                    const container =
+                        new ContainerBuilder()
+
+                            .setAccentColor(
+                                0x8B0000
+                            )
+
+                            .addTextDisplayComponents(
+                                new TextDisplayBuilder()
+                                    .setContent(
+                                        displayParts.join(
+                                            "\n\n"
+                                        )
+                                    )
+                            );
+
+                    let attachmentName = null;
+
+                    if (image) {
+
+                        const extensionMatch =
+                            (image.name || "")
+                                .match(/\.(png|jpe?g|gif|webp)$/i);
+
+                        const mimeExtensions = {
+                            "image/png": "png",
+                            "image/jpeg": "jpg",
+                            "image/gif": "gif",
+                            "image/webp": "webp"
+                        };
+
+                        const extension =
+                            extensionMatch?.[1]
+                                ?.toLowerCase()
+                                ?.replace("jpeg", "jpg") ||
+                            mimeExtensions[image.contentType] ||
+                            "png";
+
+                        attachmentName =
+                            `sam-message-${interaction.id}.${extension}`;
+
+                        container
+
+                            .addSeparatorComponents(
+                                new SeparatorBuilder()
+                                    .setDivider(true)
+                                    .setSpacing(
+                                        SeparatorSpacingSize.Small
+                                    )
+                            )
+
+                            .addMediaGalleryComponents(
+                                new MediaGalleryBuilder()
+                                    .addItems(item =>
+                                        item
+                                            .setURL(
+                                                `attachment://${attachmentName}`
+                                            )
+                                            .setDescription(
+                                                `${title || "SAM STUDIO"} image`
+                                            )
+                                    )
+                            )
+
+                            .addSeparatorComponents(
+                                new SeparatorBuilder()
+                                    .setDivider(true)
+                                    .setSpacing(
+                                        SeparatorSpacingSize.Small
+                                    )
+                            );
+                    }
+
+                    if (linkButtons.length > 0) {
+
+                        if (!image) {
+                            container.addSeparatorComponents(
+                                new SeparatorBuilder()
+                                    .setDivider(true)
+                                    .setSpacing(
+                                        SeparatorSpacingSize.Small
+                                    )
+                            );
+                        }
+
+                        container.addActionRowComponents(
+                            new ActionRowBuilder()
+                                .addComponents(
+                                    linkButtons
+                                )
                         );
                     }
 
                     const payload = {
-                        embeds: [embed]
+                        components: [
+                            container
+                        ],
+                        flags:
+                            MessageFlags.IsComponentsV2
                     };
 
-                    if (linkButtons.length > 0) {
-                        payload.components = [
-                            new ActionRowBuilder()
-                                .addComponents(linkButtons)
+                    if (
+                        image &&
+                        attachmentName
+                    ) {
+                        payload.files = [
+                            {
+                                attachment:
+                                    image.url,
+                                name:
+                                    attachmentName
+                            }
                         ];
                     }
 
-                    const sentMessage =
-                        await channel.send(
-                            payload
+                    let sentMessage;
+
+                    try {
+                        sentMessage =
+                            await channel.send(
+                                payload
+                            );
+                    } catch (error) {
+
+                        console.error(
+                            "Unable to send /msg message:",
+                            error
                         );
+
+                        return interaction.editReply(
+                            "❌ Message could not be sent. Check my channel permissions and the supplied links/image."
+                        );
+                    }
 
                     for (const emoji of ["❤️", "🔥", "😊"]) {
                         await sentMessage.react(emoji).catch(() => {});
                     }
 
-                    return interaction.reply({
-                        content:
-                            `✅ Clean message sent in ${channel}!`,
-                        flags:
-                            MessageFlags.Ephemeral
-                    });
+                    return interaction.editReply(
+                        `✅ Clean message sent in ${channel}!`
+                    );
                 }
 
                 // ================= TICKET MODAL =================
