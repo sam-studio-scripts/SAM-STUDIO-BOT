@@ -17,7 +17,12 @@ const {
     Routes,
     SlashCommandBuilder,
     Events,
-    MessageFlags
+    MessageFlags,
+    ContainerBuilder,
+    TextDisplayBuilder,
+    MediaGalleryBuilder,
+    SeparatorBuilder,
+    SeparatorSpacingSize
 } = require("discord.js");
 const fs = require("fs");
 const http = require("http");
@@ -1501,7 +1506,7 @@ client.on(
                             )
 
                             .setMaxLength(
-                                4000
+                                3700
                             )
 
                             .setRequired(
@@ -1947,32 +1952,21 @@ client.on(
                         });
                     }
 
-                    const embed =
-                        new EmbedBuilder()
+                    if (
+                        !ContainerBuilder ||
+                        !TextDisplayBuilder ||
+                        !MediaGalleryBuilder ||
+                        !SeparatorBuilder ||
+                        !SeparatorSpacingSize ||
+                        MessageFlags.IsComponentsV2 === undefined
+                    ) {
 
-                            .setColor(
-                                "#2B2D31"
-                            )
-
-                            .setTitle(
-                                `⚡ ${title}`
-                            )
-
-                            .setDescription(
-                                content
-                            )
-
-                            .setFooter({
-                                text:
-                                    `SAM STUDIO • Sent by ${interaction.user.username}`
-                            })
-
-                            .setTimestamp();
-
-                    if (pending.imageUrl) {
-                        embed.setImage(
-                            pending.imageUrl
-                        );
+                        return interaction.reply({
+                            content:
+                                "❌ Full clean layout requires the latest discord.js. Run: npm install discord.js@latest",
+                            flags:
+                                MessageFlags.Ephemeral
+                        });
                     }
 
                     const linkButtons = [];
@@ -1997,16 +1991,71 @@ client.on(
                         );
                     }
 
-                    const payload = {
-                        embeds: [embed]
-                    };
+                    const container =
+                        new ContainerBuilder()
+
+                            .setAccentColor(
+                                0x8B0000
+                            )
+
+                            .addTextDisplayComponents(
+                                new TextDisplayBuilder()
+                                    .setContent(
+                                        `## ⚡ ${title}\n\n${content}`
+                                    )
+                            );
+
+                    if (pending.imageUrl) {
+
+                        container
+
+                            .addSeparatorComponents(
+                                new SeparatorBuilder()
+                                    .setDivider(true)
+                                    .setSpacing(
+                                        SeparatorSpacingSize.Small
+                                    )
+                            )
+
+                            .addMediaGalleryComponents(
+                                new MediaGalleryBuilder()
+                                    .addItems(item =>
+                                        item
+                                            .setURL(
+                                                pending.imageUrl
+                                            )
+                                            .setDescription(
+                                                `${title} preview`
+                                            )
+                                    )
+                            )
+
+                            .addSeparatorComponents(
+                                new SeparatorBuilder()
+                                    .setDivider(true)
+                                    .setSpacing(
+                                        SeparatorSpacingSize.Small
+                                    )
+                            );
+                    }
 
                     if (linkButtons.length > 0) {
-                        payload.components = [
+
+                        container.addActionRowComponents(
                             new ActionRowBuilder()
-                                .addComponents(linkButtons)
-                        ];
+                                .addComponents(
+                                    linkButtons
+                                )
+                        );
                     }
+
+                    const payload = {
+                        components: [
+                            container
+                        ],
+                        flags:
+                            MessageFlags.IsComponentsV2
+                    };
 
                     const sentMessage =
                         await channel.send(
