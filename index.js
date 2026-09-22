@@ -283,17 +283,35 @@ function getWelcomeTemplate() {
     return welcomeTemplatePromise;
 }
 
+async function loadMemberAvatar(member) {
+    const avatarUrl = member.displayAvatarURL({
+        extension: "png",
+        size: 512,
+        forceStatic: true
+    });
+
+    // Fetch the Discord CDN image ourselves first. This is more reliable
+    // on VPS/panel hosts than passing the remote URL directly to loadImage().
+    const response = await fetch(avatarUrl);
+
+    if (!response.ok) {
+        throw new Error(
+            `Could not download Discord avatar (${response.status} ${response.statusText})`
+        );
+    }
+
+    const avatarBuffer = Buffer.from(
+        await response.arrayBuffer()
+    );
+
+    return loadImage(avatarBuffer);
+}
+
 async function makeWelcomeImage(member) {
     const [background, avatar] =
         await Promise.all([
             getWelcomeTemplate(),
-            loadImage(
-                member.displayAvatarURL({
-                    extension: "png",
-                    size: 512,
-                    forceStatic: true
-                })
-            )
+            loadMemberAvatar(member)
         ]);
 
     const canvas = createCanvas(
@@ -311,54 +329,58 @@ async function makeWelcomeImage(member) {
         canvas.height
     );
 
-    // Coordinates measured from the original 2172 x 724 template.
-    const scaleX =
-        canvas.width / 2172;
-    const scaleY =
-        canvas.height / 724;
-    const centerX =
-        1822 * scaleX;
-    const centerY =
-        361.5 * scaleY;
-    const radiusX =
-        210.5 * scaleX;
-    const radiusY =
-        210.5 * scaleY;
+    // SAM-STUDIO.png is 2048 x 768.
+    // The empty round profile area in the supplied artwork is centered
+    // at approximately (1675, 365) with a safe inner radius of 188 px.
+    // Use the real template dimensions and ONE uniform radius scale so
+    // the user's avatar remains perfectly circular instead of stretching.
+    const TEMPLATE_WIDTH = 2048;
+    const TEMPLATE_HEIGHT = 768;
+    const FRAME_CENTER_X = 1675;
+    const FRAME_CENTER_Y = 365;
+    const FRAME_RADIUS = 188;
 
+    const scaleX = canvas.width / TEMPLATE_WIDTH;
+    const scaleY = canvas.height / TEMPLATE_HEIGHT;
+    const uniformScale = Math.min(scaleX, scaleY);
+
+    const centerX = FRAME_CENTER_X * scaleX;
+    const centerY = FRAME_CENTER_Y * scaleY;
+    const radius = FRAME_RADIUS * uniformScale;
+    const diameter = radius * 2;
+
+    // Clip the avatar to the inside of the existing western frame.
     context.save();
     context.beginPath();
-    context.ellipse(
+    context.arc(
         centerX,
         centerY,
-        radiusX,
-        radiusY,
-        0,
+        radius,
         0,
         Math.PI * 2
     );
     context.closePath();
     context.clip();
 
-    const targetWidth =
-        radiusX * 2;
-    const targetHeight =
-        radiusY * 2;
+    // "Cover" crop: completely fills the circle without stretching.
     const avatarScale = Math.max(
-        targetWidth / avatar.width,
-        targetHeight / avatar.height
+        diameter / avatar.width,
+        diameter / avatar.height
     );
-    const drawWidth =
-        avatar.width * avatarScale;
-    const drawHeight =
-        avatar.height * avatarScale;
+
+    const drawWidth = avatar.width * avatarScale;
+    const drawHeight = avatar.height * avatarScale;
+    const drawX = centerX - drawWidth / 2;
+    const drawY = centerY - drawHeight / 2;
 
     context.drawImage(
         avatar,
-        centerX - drawWidth / 2,
-        centerY - drawHeight / 2,
+        drawX,
+        drawY,
         drawWidth,
         drawHeight
     );
+
     context.restore();
 
     return canvas.encode("png");
