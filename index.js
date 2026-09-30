@@ -413,15 +413,15 @@ function makeActionId(prefix = "LOG") {
 }
 
 const LOG_CHANNEL_META = {
-    MOD: { name: "sam-mod-logs", label: "Moderation Logs" },
-    TICKET: { name: "sam-ticket-logs", label: "Ticket Logs" },
-    MSG: { name: "sam-message-logs", label: "Message Logs" },
-    VC: { name: "sam-voice-logs", label: "Voice Logs" },
-    JOIN: { name: "sam-join-leave-logs", label: "Join & Leave Logs" },
-    ROLE: { name: "sam-role-logs", label: "Role Logs" },
-    SERVER: { name: "sam-server-logs", label: "Server Logs" },
-    INVITE: { name: "sam-invite-logs", label: "Invite Logs" },
-    NICKNAME: { name: "sam-nickname-logs", label: "Nickname Logs" }
+    MOD: { name: "mod-logs", label: "Moderation Logs" },
+    TICKET: { name: "ticket-logs", label: "Ticket Logs" },
+    MSG: { name: "message-logs", label: "Message Logs" },
+    VC: { name: "voice-logs", label: "Voice Logs" },
+    JOIN: { name: "join-leave-logs", label: "Join & Leave Logs" },
+    ROLE: { name: "role-logs", label: "Role Logs" },
+    SERVER: { name: "server-logs", label: "Server Logs" },
+    INVITE: { name: "invite-logs", label: "Invite Logs" },
+    NICKNAME: { name: "nickname-logs", label: "Nickname Logs" }
 };
 
 function logKeyFromChannelId(channelId) {
@@ -491,7 +491,7 @@ async function ensureLogChannel(guild, key) {
         return channel;
     }
 
-    const meta = LOG_CHANNEL_META[key] || { name: `sam-${String(key).toLowerCase()}-logs`, label: `${key} Logs` };
+    const meta = LOG_CHANNEL_META[key] || { name: `${String(key).toLowerCase()}-logs`, label: `${key} Logs` };
     const existingByName = guild.channels.cache.find(ch => ch.type === ChannelType.GuildText && ch.name === meta.name);
     if (existingByName) {
         LOG_CHANNELS[key] = existingByName.id;
@@ -895,8 +895,7 @@ function summarizeDangerousRoles(rolesCollection) {
         }
     }
 
-    return lines.length ? trimText(lines.join("
-"), 1024) : null;
+    return lines.length ? trimText(lines.join("\n"), 1024) : null;
 }
 
 function getWelcomeTemplate() {
@@ -3748,12 +3747,8 @@ client.on(
                             const extraBits = [];
                             if (item.durationMinutes) extraBits.push(`Duration: **${item.durationMinutes}m**`);
                             if (item.warningCount) extraBits.push(`Warnings: **${item.warningCount}**`);
-                            return `**${String(item.action || "action").toUpperCase()}** • ${when} • ${mod}
-${trimText(item.reason || "No reason provided", 220)}${extraBits.length ? `
-${extraBits.join(" • ")}` : ""}`;
-                        }).join("
-
-")
+                            return `**${String(item.action || "action").toUpperCase()}** • ${when} • ${mod}\n${trimText(item.reason || "No reason provided", 220)}${extraBits.length ? `\n${extraBits.join(" • ")}` : ""}`;
+                        }).join("\n\n")
                         : "No moderation history recorded by this bot yet.";
 
                     const embed = makeLogEmbed({
@@ -5767,58 +5762,36 @@ client.on(
 
         const member = newState.member || oldState.member;
         if (!member) return;
+        if (oldState.channelId === newState.channelId) return;
 
-        const fields = [
-            { name: "👤 Member", value: userLabel(member.user), inline: false }
-        ];
-        let title = "Voice State Updated";
+        let title = "Voice Channel Updated";
         let emoji = "🎙️";
         let color = 0x3498db;
 
-        if (oldState.channelId !== newState.channelId) {
-            if (!oldState.channelId && newState.channelId) {
-                title = "Voice Channel Joined";
-                emoji = "📥";
-                color = 0x57f287;
-            } else if (oldState.channelId && !newState.channelId) {
-                title = "Voice Channel Left";
-                emoji = "📤";
-                color = 0xed4245;
-            } else {
-                title = "Voice Channel Switched";
-                emoji = "🔄";
-                color = 0x5865f2;
-            }
-
-            fields.push(
-                { name: "From", value: oldState.channel ? formatChannel(oldState.channel) : "Not in voice", inline: true },
-                { name: "To", value: newState.channel ? formatChannel(newState.channel) : "Not in voice", inline: true }
-            );
+        if (!oldState.channelId && newState.channelId) {
+            title = "Voice Channel Joined";
+            emoji = "📥";
+            color = 0x57f287;
+        } else if (oldState.channelId && !newState.channelId) {
+            title = "Voice Channel Left";
+            emoji = "📤";
+            color = 0xed4245;
+        } else {
+            title = "Voice Channel Switched";
+            emoji = "🔄";
+            color = 0x5865f2;
         }
-
-        const stateChanges = [];
-        const addChange = (label, oldValue, newValue) => {
-            if (oldValue !== newValue) stateChanges.push(`${label}: **${oldValue ? "On" : "Off"} → ${newValue ? "On" : "Off"}**`);
-        };
-        addChange("Self Mute", oldState.selfMute, newState.selfMute);
-        addChange("Self Deaf", oldState.selfDeaf, newState.selfDeaf);
-        addChange("Server Mute", oldState.serverMute, newState.serverMute);
-        addChange("Server Deaf", oldState.serverDeaf, newState.serverDeaf);
-        addChange("Streaming", oldState.streaming, newState.streaming);
-        addChange("Camera", oldState.selfVideo, newState.selfVideo);
-
-        if (stateChanges.length) {
-            fields.push({ name: "Voice Status Changes", value: stateChanges.join("\n"), inline: false });
-        }
-
-        if (oldState.channelId === newState.channelId && !stateChanges.length) return;
 
         const embed = makeLogEmbed({
             title,
             color,
             emoji,
             user: member.user
-        }).addFields(fields);
+        }).addFields(
+            { name: "👤 Member", value: userLabel(member.user), inline: false },
+            { name: "From", value: oldState.channel ? formatChannel(oldState.channel) : "Not in voice", inline: true },
+            { name: "To", value: newState.channel ? formatChannel(newState.channel) : "Not in voice", inline: true }
+        );
 
         await sendLog(newState.guild, LOG_CHANNELS.VC, embed);
     }
@@ -5844,26 +5817,46 @@ client.on(
                     newMember.id
                 );
 
+                let title = "Member Roles Updated";
+                if (added.size && !removed.size) title = added.size === 1 ? "Role Added" : "Roles Added";
+                if (removed.size && !added.size) title = removed.size === 1 ? "Role Removed" : "Roles Removed";
+
                 const embed = makeLogEmbed({
-                    title: "Member Roles Updated",
+                    title,
                     color: 0x9b59b6,
                     emoji: "🎭",
                     user: newMember.user
                 }).addFields(
-                    { name: "👤 Member", value: userLabel(newMember.user), inline: false },
-                    {
-                        name: "➕ Added",
-                        value: added.size ? trimText(added.map(r => `${r} • \`${r.id}\``).join("\n"), 1024) : "None",
+                    { name: "👤 Member", value: userLabel(newMember.user), inline: false }
+                );
+
+                if (added.size) {
+                    embed.addFields({
+                        name: `➕ Added Role${added.size > 1 ? "s" : ""}`,
+                        value: trimText(added.map(r => `${r} • \`${r.id}\``).join("\n"), 1024),
                         inline: false
-                    },
-                    {
-                        name: "➖ Removed",
-                        value: removed.size ? trimText(removed.map(r => `${r} • \`${r.id}\``).join("\n"), 1024) : "None",
+                    });
+                }
+
+                if (removed.size) {
+                    embed.addFields({
+                        name: `➖ Removed Role${removed.size > 1 ? "s" : ""}`,
+                        value: trimText(removed.map(r => `${r} • \`${r.id}\``).join("\n"), 1024),
                         inline: false
-                    },
-                    { name: "🛡️ Changed By", value: executor ? userLabel(executor) : "Unknown / bot could not read audit log", inline: false },
-                    { name: "🖥️ Client", value: clientPlatformLabel(newMember), inline: true },
-                    { name: "🌐 Known Language", value: knownLocaleLabel(newMember.id), inline: false }
+                    });
+                }
+
+                const dangerousAdded = summarizeDangerousRoles(added);
+                if (dangerousAdded) {
+                    embed.addFields({
+                        name: "⚠️ Security Alert",
+                        value: dangerousAdded,
+                        inline: false
+                    });
+                }
+
+                embed.addFields(
+                    { name: "🛡️ Changed By", value: executor ? userLabel(executor) : "Unknown / bot could not read audit log", inline: false }
                 );
 
                 await sendLog(newMember.guild, LOG_CHANNELS.ROLE, embed);
