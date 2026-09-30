@@ -11,6 +11,7 @@ const {
     ChannelType,
     StringSelectMenuBuilder,
     ChannelSelectMenuBuilder,
+    RoleSelectMenuBuilder,
     ModalBuilder,
     TextInputBuilder,
     TextInputStyle,
@@ -48,12 +49,14 @@ let welcomeTemplatePromise = null;
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = "1536547186962333777";
 const PANEL_CHANNEL_ID = "1526597563736916028";
-const STAFF_ROLE_ID = "1526597468861763825";
+const DEFAULT_STAFF_ROLE_ID = "1526597468861763825";
+let STAFF_ROLE_ID = DEFAULT_STAFF_ROLE_ID;
 const LEGACY_STAFF_ROLE_ID = "686569170330058753";
 const VERIFIED_ROLE_ID = "1526597473970294914";
 const WELCOME_CHANNEL_ID = "1526597511228166267";
 const GOODBYE_CHANNEL_ID = "1536548597078691950";
-const CLOSED_CATEGORY_ID = "1544914321090543626";
+const DEFAULT_CLOSED_CATEGORY_ID = "1544914321090543626";
+let CLOSED_CATEGORY_ID = DEFAULT_CLOSED_CATEGORY_ID;
 
 // Log Channels
 const LOG_CHANNELS = {
@@ -129,7 +132,9 @@ function loadBotState() {
                 },
                 giveaways: {},
                 inviteStats: {},
-                memberInviters: {}
+                memberInviters: {},
+                settings: {},
+                userLocales: {}
             };
         }
 
@@ -141,11 +146,13 @@ function loadBotState() {
                 : {},
             giveaways: parsed.giveaways && typeof parsed.giveaways === "object" ? parsed.giveaways : {},
             inviteStats: parsed.inviteStats && typeof parsed.inviteStats === "object" ? parsed.inviteStats : {},
-            memberInviters: parsed.memberInviters && typeof parsed.memberInviters === "object" ? parsed.memberInviters : {}
+            memberInviters: parsed.memberInviters && typeof parsed.memberInviters === "object" ? parsed.memberInviters : {},
+            settings: parsed.settings && typeof parsed.settings === "object" ? parsed.settings : {},
+            userLocales: parsed.userLocales && typeof parsed.userLocales === "object" ? parsed.userLocales : {}
         };
     } catch (error) {
         console.error("Could not load SAM bot state:", error.message);
-        return { warnings: {}, protections: {}, giveaways: {}, inviteStats: {}, memberInviters: {} };
+        return { warnings: {}, protections: {}, giveaways: {}, inviteStats: {}, memberInviters: {}, settings: {}, userLocales: {} };
     }
 }
 
@@ -158,14 +165,54 @@ let activeGiveaways = new Map(Object.entries(botState.giveaways || {}));
 let invites = new Map();
 let inviteStats = botState.inviteStats || {};
 let memberInviters = botState.memberInviters || {};
+let userLocales = botState.userLocales || {};
+
+const DEFAULT_LOG_APPEARANCE = {
+    footer: "SAM STUDIO • Security & Activity Logs",
+    moderationColor: 0xE67E22,
+    ticketColor: 0x9B59B6,
+    roleColor: 0x3498DB,
+    joinColor: 0x57F287,
+    deleteColor: 0xED4245
+};
+
+const runtimeSettings = {
+    logFooter: botState.settings?.logFooter || DEFAULT_LOG_APPEARANCE.footer,
+    moderationColor: Number.isInteger(botState.settings?.moderationColor) ? botState.settings.moderationColor : DEFAULT_LOG_APPEARANCE.moderationColor,
+    ticketColor: Number.isInteger(botState.settings?.ticketColor) ? botState.settings.ticketColor : DEFAULT_LOG_APPEARANCE.ticketColor,
+    roleColor: Number.isInteger(botState.settings?.roleColor) ? botState.settings.roleColor : DEFAULT_LOG_APPEARANCE.roleColor,
+    joinColor: Number.isInteger(botState.settings?.joinColor) ? botState.settings.joinColor : DEFAULT_LOG_APPEARANCE.joinColor,
+    deleteColor: Number.isInteger(botState.settings?.deleteColor) ? botState.settings.deleteColor : DEFAULT_LOG_APPEARANCE.deleteColor
+};
+
+if (/^\d{17,20}$/.test(botState.settings?.staffRoleId || "")) {
+    STAFF_ROLE_ID = botState.settings.staffRoleId;
+}
+if (/^\d{17,20}$/.test(botState.settings?.closedCategoryId || "")) {
+    CLOSED_CATEGORY_ID = botState.settings.closedCategoryId;
+}
+if (botState.settings?.logChannels && typeof botState.settings.logChannels === "object") {
+    for (const key of Object.keys(LOG_CHANNELS)) {
+        if (/^\d{17,20}$/.test(botState.settings.logChannels[key] || "")) {
+            LOG_CHANNELS[key] = botState.settings.logChannels[key];
+        }
+    }
+}
+if (botState.settings?.ticketCategoryIds && typeof botState.settings.ticketCategoryIds === "object") {
+    for (const key of Object.keys(CATEGORY_IDS)) {
+        if (/^\d{17,20}$/.test(botState.settings.ticketCategoryIds[key] || "")) {
+            CATEGORY_IDS[key] = botState.settings.ticketCategoryIds[key];
+        }
+    }
+}
 
 const spamTracker = new Map();
 const protectionViolations = new Map();
 
-const SPAM_LIMIT = Math.max(3, Number(process.env.SPAM_LIMIT || 6));
-const SPAM_WINDOW_MS = Math.max(3000, Number(process.env.SPAM_WINDOW_MS || 7000));
-const SPAM_TIMEOUT_MS = Math.max(60000, Number(process.env.SPAM_TIMEOUT_MS || 300000));
-const MENTION_LIMIT = Math.max(3, Number(process.env.MENTION_LIMIT || 5));
+let SPAM_LIMIT = Math.max(3, Number(botState.settings?.spamLimit ?? process.env.SPAM_LIMIT ?? 6));
+let SPAM_WINDOW_MS = Math.max(3000, Number(botState.settings?.spamWindowMs ?? process.env.SPAM_WINDOW_MS ?? 7000));
+let SPAM_TIMEOUT_MS = Math.max(60000, Number(botState.settings?.spamTimeoutMs ?? process.env.SPAM_TIMEOUT_MS ?? 300000));
+let MENTION_LIMIT = Math.max(3, Number(botState.settings?.mentionLimit ?? process.env.MENTION_LIMIT ?? 5));
 
 function saveBotState() {
     try {
@@ -179,6 +226,24 @@ function saveBotState() {
         botState.giveaways = Object.fromEntries(activeGiveaways);
         botState.inviteStats = inviteStats;
         botState.memberInviters = memberInviters;
+        botState.userLocales = userLocales;
+        botState.settings = {
+            ...(botState.settings || {}),
+            staffRoleId: STAFF_ROLE_ID,
+            closedCategoryId: CLOSED_CATEGORY_ID,
+            logChannels: { ...LOG_CHANNELS },
+            ticketCategoryIds: { ...CATEGORY_IDS },
+            spamLimit: SPAM_LIMIT,
+            spamWindowMs: SPAM_WINDOW_MS,
+            spamTimeoutMs: SPAM_TIMEOUT_MS,
+            mentionLimit: MENTION_LIMIT,
+            logFooter: runtimeSettings.logFooter,
+            moderationColor: runtimeSettings.moderationColor,
+            ticketColor: runtimeSettings.ticketColor,
+            roleColor: runtimeSettings.roleColor,
+            joinColor: runtimeSettings.joinColor,
+            deleteColor: runtimeSettings.deleteColor
+        };
 
         const tempFile = `${BOT_STATE_FILE}.tmp`;
         fs.writeFileSync(tempFile, JSON.stringify(botState, null, 2), "utf8");
@@ -324,6 +389,76 @@ const client = new Client({
 });
 
 // ================= HELPER =================
+function actionIdPrefix(channelId, title = "") {
+    if (channelId === LOG_CHANNELS.MOD) return "MOD";
+    if (channelId === LOG_CHANNELS.TICKET) return "TKT";
+    if (channelId === LOG_CHANNELS.ROLE) return "ROLE";
+    if (channelId === LOG_CHANNELS.JOIN) return "JOIN";
+    if (channelId === LOG_CHANNELS.MSG) return /deleted/i.test(title) ? "DEL" : "MSG";
+    if (channelId === LOG_CHANNELS.VC) return "VC";
+    if (channelId === LOG_CHANNELS.INVITE) return "INV";
+    if (channelId === LOG_CHANNELS.NICKNAME) return "NICK";
+    if (channelId === LOG_CHANNELS.SERVER) return "SRV";
+    return "LOG";
+}
+
+function makeActionId(prefix = "LOG") {
+    const stamp = Date.now().toString(36).toUpperCase();
+    const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
+    return `${prefix}-${stamp}-${rand}`;
+}
+
+function resolvePremiumLogColor(channelId, title = "") {
+    if (/deleted|ban|kick|timeout|warn|blocked|violation|spam|failed|cancel/i.test(title)) {
+        return runtimeSettings.deleteColor;
+    }
+    if (channelId === LOG_CHANNELS.MOD) return runtimeSettings.moderationColor;
+    if (channelId === LOG_CHANNELS.TICKET) return runtimeSettings.ticketColor;
+    if (channelId === LOG_CHANNELS.ROLE) return runtimeSettings.roleColor;
+    if (channelId === LOG_CHANNELS.JOIN) return runtimeSettings.joinColor;
+    if (channelId === LOG_CHANNELS.MSG && /edited/i.test(title)) return 0xFEE75C;
+    if (channelId === LOG_CHANNELS.VC) return 0x3498DB;
+    if (channelId === LOG_CHANNELS.INVITE) return 0x57F287;
+    if (channelId === LOG_CHANNELS.NICKNAME) return 0xFEE75C;
+    if (channelId === LOG_CHANNELS.SERVER) return 0x5865F2;
+    return null;
+}
+
+function applyPremiumLogStyling(embed, channelId) {
+    if (!embed?.data) return embed;
+
+    const title = embed.data.title || "Activity Log";
+    const forcedColor = resolvePremiumLogColor(channelId, title);
+    if (forcedColor != null) embed.setColor(forcedColor);
+
+    const fields = embed.data.fields || [];
+    const now = Math.floor(Date.now() / 1000);
+
+    if (!fields.some(field => field.name === "🆔 Action ID") && fields.length < 24) {
+        embed.addFields({
+            name: "🆔 Action ID",
+            value: `\`${makeActionId(actionIdPrefix(channelId, title))}\``,
+            inline: true
+        });
+    }
+
+    const updatedFields = embed.data.fields || [];
+    if (!updatedFields.some(field => field.name === "🕒 Event Time") && updatedFields.length < 25) {
+        embed.addFields({
+            name: "🕒 Event Time",
+            value: `<t:${now}:F>\n<t:${now}:R>`,
+            inline: true
+        });
+    }
+
+    if (!embed.data.footer?.text || embed.data.footer.text.includes("SAM STUDIO")) {
+        embed.setFooter({ text: runtimeSettings.logFooter });
+    }
+
+    embed.setTimestamp();
+    return embed;
+}
+
 async function sendLog(guild, channelId, embed, extra = {}) {
     if (!guild || !channelId) return null;
 
@@ -334,6 +469,8 @@ async function sendLog(guild, channelId, embed, extra = {}) {
     if (!channel || !channel.isTextBased() || typeof channel.send !== "function") {
         return null;
     }
+
+    applyPremiumLogStyling(embed, channelId);
 
     return channel.send({
         embeds: [embed],
@@ -355,12 +492,49 @@ function userLabel(user) {
     return `<@${user.id}>\n\`${user.tag || user.username || user.id}\` • \`${user.id}\``;
 }
 
-function makeLogEmbed({ title, color = 0x2b2d31, emoji = "📋", description = null, user = null, footer = "SAM STUDIO • Security & Activity Logs" }) {
+function rememberInteractionLocale(interaction) {
+    if (!interaction?.user?.id || !interaction.locale) return;
+
+    const previous = userLocales[interaction.user.id];
+    const now = Date.now();
+    const shouldPersist =
+        !previous ||
+        previous.locale !== interaction.locale ||
+        now - Number(previous.observedAt || 0) > 60 * 60_000;
+
+    userLocales[interaction.user.id] = {
+        locale: interaction.locale,
+        observedAt: now
+    };
+
+    if (shouldPersist) saveBotState();
+}
+
+function knownLocaleLabel(userId) {
+    const entry = userLocales[userId];
+    if (!entry?.locale) return "Unknown / not observed through a slash interaction";
+    const ts = Math.floor((entry.observedAt || Date.now()) / 1000);
+    return `\`${entry.locale}\`\nLast observed <t:${ts}:R>\n*Language/locale only — not a verified country.*`;
+}
+
+function clientPlatformLabel(member) {
+    const clientStatus = member?.presence?.clientStatus;
+    if (!clientStatus || typeof clientStatus !== "object") {
+        return "Unavailable / offline";
+    }
+
+    const platforms = Object.keys(clientStatus).filter(Boolean);
+    return platforms.length
+        ? platforms.map(name => `\`${name}\``).join(", ")
+        : "Unavailable / offline";
+}
+
+function makeLogEmbed({ title, color = 0x2b2d31, emoji = "📋", description = null, user = null, footer = null }) {
     const embed = new EmbedBuilder()
         .setColor(color)
         .setTitle(`${emoji} ${title}`)
         .setTimestamp()
-        .setFooter({ text: footer });
+        .setFooter({ text: footer || runtimeSettings.logFooter });
 
     if (description) embed.setDescription(description);
     if (user?.displayAvatarURL) {
@@ -1009,6 +1183,19 @@ function buildAdvancedMessageModal(draft) {
         );
 }
 
+function parseSettingsColor(value, currentValue) {
+    const clean = String(value || "").trim();
+    if (!clean) return currentValue;
+    if (!/^#?[0-9a-f]{6}$/i.test(clean)) {
+        throw new Error("Colour must be a 6-digit hex value such as #9B59B6.");
+    }
+    return parseInt(clean.replace("#", ""), 16);
+}
+
+function hexColor(value) {
+    return `#${Number(value || 0).toString(16).padStart(6, "0").toUpperCase()}`;
+}
+
 function parseAccentColor(value) {
     const clean = String(value || "").trim();
     if (!clean) return 0x8B0000;
@@ -1565,6 +1752,409 @@ async function syncTicketStaffPermissions(guild) {
     );
 }
 
+
+// ================= DIRECT DISCORD ADMIN PANEL =================
+const ADMIN_PANEL_COLOR = 0x5865F2;
+
+const ADMIN_LOG_LABELS = {
+    MOD: "Moderation",
+    TICKET: "Tickets",
+    MSG: "Messages",
+    VC: "Voice",
+    JOIN: "Join / Leave",
+    ROLE: "Roles",
+    SERVER: "Server",
+    INVITE: "Invites",
+    NICKNAME: "Nickname"
+};
+
+function adminPanelAllowed(interaction) {
+    return Boolean(
+        interaction?.member?.permissions?.has(PermissionsBitField.Flags.Administrator)
+    );
+}
+
+function safeDefaultChannel(builder, channelId) {
+    if (/^\d{17,20}$/.test(channelId || "")) {
+        try { builder.setDefaultChannels(channelId); } catch (error) {}
+    }
+    return builder;
+}
+
+function safeDefaultRole(builder, roleId) {
+    if (/^\d{17,20}$/.test(roleId || "")) {
+        try { builder.setDefaultRoles(roleId); } catch (error) {}
+    }
+    return builder;
+}
+
+function adminPanelBaseEmbed(title, description) {
+    return new EmbedBuilder()
+        .setColor(ADMIN_PANEL_COLOR)
+        .setTitle(title)
+        .setDescription(description)
+        .setFooter({ text: "SAM STUDIO • Direct Discord Admin Panel" })
+        .setTimestamp();
+}
+
+function buildAdminHome(interaction) {
+    const guild = interaction.guild;
+    const activeTickets = guild.channels.cache.filter(channel =>
+        channel.type === ChannelType.GuildText &&
+        channel.topic?.includes("sam-ticket-user:") &&
+        !channel.name.startsWith("closed-")
+    ).size;
+
+    const embed = adminPanelBaseEmbed(
+        "⚙️ SAM STUDIO Admin Panel",
+        "Manage the bot directly inside Discord. Changes save instantly and survive bot restarts.\n\n**No channel IDs or role IDs need to be typed manually.**"
+    ).addFields(
+        { name: "🎫 Active Tickets", value: `\`${activeTickets}\``, inline: true },
+        { name: "🎉 Active Giveaways", value: `\`${activeGiveaways.size}\``, inline: true },
+        { name: "⏰ Scheduled Messages", value: `\`${Object.keys(messageStore.scheduled || {}).length}\``, inline: true },
+        { name: "🛡️ Protection", value: `Spam: \`${antiSpamChannels.size}\` channels\nLinks: \`${antiLinkChannels.size}\` channels\nMentions: \`${antiMentionChannels.size}\` channels`, inline: true },
+        { name: "📋 Log Destinations", value: `${Object.values(LOG_CHANNELS).filter(Boolean).length}/${Object.keys(LOG_CHANNELS).length} configured`, inline: true },
+        { name: "👤 Opened By", value: userLabel(interaction.user), inline: false }
+    );
+
+    return {
+        embeds: [embed],
+        components: [
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId("adminpanel_tickets").setLabel("Tickets").setEmoji("🎫").setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId("adminpanel_logs").setLabel("Logs").setEmoji("📋").setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId("adminpanel_protection").setLabel("Protection").setEmoji("🛡️").setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId("adminpanel_appearance").setLabel("Appearance").setEmoji("🎨").setStyle(ButtonStyle.Secondary)
+            ),
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId("adminpanel_status").setLabel("Bot Status").setEmoji("📊").setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId("adminpanel_refresh").setLabel("Refresh").setEmoji("🔄").setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId("adminpanel_close").setLabel("Close Panel").setEmoji("✖️").setStyle(ButtonStyle.Danger)
+            )
+        ]
+    };
+}
+
+function buildAdminTickets(interaction, selectedType = null) {
+    const staffRole = interaction.guild.roles.cache.get(STAFF_ROLE_ID);
+    const closedCategory = interaction.guild.channels.cache.get(CLOSED_CATEGORY_ID);
+
+    const embed = adminPanelBaseEmbed(
+        "🎫 Ticket Settings",
+        "Change ticket roles and categories with Discord pickers. Existing ticket permissions are synced automatically when the staff role changes."
+    ).addFields(
+        { name: "Staff Role", value: staffRole ? `${staffRole} • \`${staffRole.id}\`` : "Not configured / missing", inline: false },
+        { name: "Closed Category", value: closedCategory ? `${closedCategory.name} • \`${closedCategory.id}\`` : "Not configured / missing", inline: false },
+        { name: "Pre-purchase", value: CATEGORY_IDS.pre_purchase ? `<#${CATEGORY_IDS.pre_purchase}>` : "Not configured", inline: true },
+        { name: "Script Support", value: CATEGORY_IDS.script_support ? `<#${CATEGORY_IDS.script_support}>` : "Not configured", inline: true },
+        { name: "Partners", value: CATEGORY_IDS.partners ? `<#${CATEGORY_IDS.partners}>` : "Not configured", inline: true }
+    );
+
+    const roleSelect = safeDefaultRole(
+        new RoleSelectMenuBuilder()
+            .setCustomId("adminpanel_staff_role")
+            .setPlaceholder("Select ticket staff role")
+            .setMinValues(1)
+            .setMaxValues(1),
+        STAFF_ROLE_ID
+    );
+
+    const closedSelect = safeDefaultChannel(
+        new ChannelSelectMenuBuilder()
+            .setCustomId("adminpanel_closed_category")
+            .setPlaceholder("Select closed-ticket category")
+            .setChannelTypes(ChannelType.GuildCategory)
+            .setMinValues(1)
+            .setMaxValues(1),
+        CLOSED_CATEGORY_ID
+    );
+
+    const typeSelect = new StringSelectMenuBuilder()
+        .setCustomId("adminpanel_ticket_category_type")
+        .setPlaceholder("Choose a ticket category to change")
+        .addOptions(
+            { label: "Pre-purchase Questions", value: "pre_purchase", emoji: "❓", default: selectedType === "pre_purchase" },
+            { label: "Script Support", value: "script_support", emoji: "🔧", default: selectedType === "script_support" },
+            { label: "Partners", value: "partners", emoji: "🌟", default: selectedType === "partners" }
+        );
+
+    const rows = [
+        new ActionRowBuilder().addComponents(roleSelect),
+        new ActionRowBuilder().addComponents(closedSelect),
+        new ActionRowBuilder().addComponents(typeSelect)
+    ];
+
+    if (selectedType && CATEGORY_IDS[selectedType] !== undefined) {
+        const categorySelect = safeDefaultChannel(
+            new ChannelSelectMenuBuilder()
+                .setCustomId(`adminpanel_ticket_category_channel:${selectedType}`)
+                .setPlaceholder(`Select ${TICKET_LABELS[selectedType]} category`)
+                .setChannelTypes(ChannelType.GuildCategory)
+                .setMinValues(1)
+                .setMaxValues(1),
+            CATEGORY_IDS[selectedType]
+        );
+        rows.push(new ActionRowBuilder().addComponents(categorySelect));
+    }
+
+    rows.push(new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId("adminpanel_home").setLabel("Back").setEmoji("⬅️").setStyle(ButtonStyle.Secondary)
+    ));
+
+    return { embeds: [embed], components: rows };
+}
+
+function buildAdminLogs(selectedType = null) {
+    const lines = Object.entries(ADMIN_LOG_LABELS)
+        .map(([key, label]) => `${label}: ${LOG_CHANNELS[key] ? `<#${LOG_CHANNELS[key]}>` : "`Not configured`"}`)
+        .join("\n");
+
+    const embed = adminPanelBaseEmbed(
+        "📋 Premium Log Settings",
+        "Choose a log category, then choose its destination channel. All premium styling and Action IDs remain automatic."
+    ).addFields({ name: "Current Destinations", value: trimText(lines, 4000), inline: false });
+
+    if (selectedType && ADMIN_LOG_LABELS[selectedType]) {
+        embed.addFields({
+            name: "Currently Editing",
+            value: `**${ADMIN_LOG_LABELS[selectedType]}** → ${LOG_CHANNELS[selectedType] ? `<#${LOG_CHANNELS[selectedType]}>` : "Not configured"}`,
+            inline: false
+        });
+    }
+
+    const typeSelect = new StringSelectMenuBuilder()
+        .setCustomId("adminpanel_log_type")
+        .setPlaceholder("Select log category")
+        .addOptions(Object.entries(ADMIN_LOG_LABELS).map(([value, label]) => ({
+            label,
+            value,
+            default: selectedType === value
+        })));
+
+    const rows = [new ActionRowBuilder().addComponents(typeSelect)];
+
+    if (selectedType && ADMIN_LOG_LABELS[selectedType]) {
+        const channelSelect = safeDefaultChannel(
+            new ChannelSelectMenuBuilder()
+                .setCustomId(`adminpanel_log_channel:${selectedType}`)
+                .setPlaceholder(`Select ${ADMIN_LOG_LABELS[selectedType]} log channel`)
+                .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+                .setMinValues(1)
+                .setMaxValues(1),
+            LOG_CHANNELS[selectedType]
+        );
+        rows.push(new ActionRowBuilder().addComponents(channelSelect));
+    }
+
+    rows.push(new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId("adminpanel_home").setLabel("Back").setEmoji("⬅️").setStyle(ButtonStyle.Secondary)
+    ));
+
+    return { embeds: [embed], components: rows };
+}
+
+function buildAdminProtection(selectedChannelId = null, guild = null) {
+    const selectedChannel = selectedChannelId && guild
+        ? guild.channels.cache.get(selectedChannelId)
+        : null;
+
+    const embed = adminPanelBaseEmbed(
+        "🛡️ Protection Settings",
+        "Adjust global thresholds or select a channel to enable/disable the existing anti-spam, anti-link and anti-mass-mention protection."
+    ).addFields(
+        { name: "Spam Trigger", value: `\`${SPAM_LIMIT}\` messages / \`${Math.round(SPAM_WINDOW_MS / 1000)}\` sec`, inline: true },
+        { name: "Repeated-Spam Timeout", value: `\`${Math.round(SPAM_TIMEOUT_MS / 60000)}\` min`, inline: true },
+        { name: "Mass Mention Trigger", value: `\`${MENTION_LIMIT}\` mentions`, inline: true },
+        { name: "Protected Channels", value: `Anti-Spam: \`${antiSpamChannels.size}\`\nAnti-Link: \`${antiLinkChannels.size}\`\nAnti-Mention: \`${antiMentionChannels.size}\``, inline: true }
+    );
+
+    const channelSelect = safeDefaultChannel(
+        new ChannelSelectMenuBuilder()
+            .setCustomId("adminpanel_protection_channel")
+            .setPlaceholder("Select channel to manage protection")
+            .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+            .setMinValues(1)
+            .setMaxValues(1),
+        selectedChannelId
+    );
+
+    const rows = [new ActionRowBuilder().addComponents(channelSelect)];
+
+    if (selectedChannel) {
+        const spamEnabled = antiSpamChannels.has(selectedChannel.id);
+        const linkEnabled = antiLinkChannels.has(selectedChannel.id);
+        const mentionEnabled = antiMentionChannels.has(selectedChannel.id);
+
+        embed.addFields({
+            name: "Selected Channel",
+            value: `${formatChannel(selectedChannel)}\nSpam: **${spamEnabled ? "ON" : "OFF"}** • Links: **${linkEnabled ? "ON" : "OFF"}** • Mentions: **${mentionEnabled ? "ON" : "OFF"}**`,
+            inline: false
+        });
+
+        rows.push(new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`adminpanel_prot_toggle:spam:${selectedChannel.id}`)
+                .setLabel(`${spamEnabled ? "Disable" : "Enable"} Anti-Spam`)
+                .setStyle(spamEnabled ? ButtonStyle.Danger : ButtonStyle.Success),
+            new ButtonBuilder()
+                .setCustomId(`adminpanel_prot_toggle:link:${selectedChannel.id}`)
+                .setLabel(`${linkEnabled ? "Disable" : "Enable"} Anti-Link`)
+                .setStyle(linkEnabled ? ButtonStyle.Danger : ButtonStyle.Success),
+            new ButtonBuilder()
+                .setCustomId(`adminpanel_prot_toggle:mention:${selectedChannel.id}`)
+                .setLabel(`${mentionEnabled ? "Disable" : "Enable"} Anti-Mention`)
+                .setStyle(mentionEnabled ? ButtonStyle.Danger : ButtonStyle.Success)
+        ));
+    }
+
+    rows.push(new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId("adminpanel_protection_thresholds").setLabel("Edit Thresholds").setEmoji("⚙️").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId("adminpanel_home").setLabel("Back").setEmoji("⬅️").setStyle(ButtonStyle.Secondary)
+    ));
+
+    return { embeds: [embed], components: rows };
+}
+
+function buildAdminAppearance() {
+    const embed = adminPanelBaseEmbed(
+        "🎨 Premium Log Appearance",
+        "Edit the shared footer and fixed theme colours used by the premium log system."
+    ).addFields(
+        { name: "Footer", value: trimText(runtimeSettings.logFooter, 1024), inline: false },
+        { name: "Moderation", value: `\`${hexColor(runtimeSettings.moderationColor)}\``, inline: true },
+        { name: "Ticket", value: `\`${hexColor(runtimeSettings.ticketColor)}\``, inline: true },
+        { name: "Role", value: `\`${hexColor(runtimeSettings.roleColor)}\``, inline: true },
+        { name: "Join", value: `\`${hexColor(runtimeSettings.joinColor)}\``, inline: true },
+        { name: "Delete / Critical", value: `\`${hexColor(runtimeSettings.deleteColor)}\``, inline: true }
+    );
+
+    return {
+        embeds: [embed],
+        components: [
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId("adminpanel_edit_colors").setLabel("Edit Colours").setEmoji("🎨").setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId("adminpanel_edit_footer").setLabel("Edit Footer").setEmoji("📝").setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId("adminpanel_home").setLabel("Back").setEmoji("⬅️").setStyle(ButtonStyle.Secondary)
+            )
+        ]
+    };
+}
+
+function buildAdminStatus(interaction) {
+    const guild = interaction.guild;
+    const activeTickets = guild.channels.cache.filter(channel =>
+        channel.type === ChannelType.GuildText &&
+        channel.topic?.includes("sam-ticket-user:") &&
+        !channel.name.startsWith("closed-")
+    ).size;
+
+    const uptimeSeconds = Math.max(0, Math.floor(process.uptime()));
+    const embed = adminPanelBaseEmbed(
+        "📊 Bot Status",
+        "Live status for the currently running SAM STUDIO bot process."
+    ).addFields(
+        { name: "WebSocket Ping", value: `\`${client.ws.ping} ms\``, inline: true },
+        { name: "Uptime", value: `\`${Math.floor(uptimeSeconds / 3600)}h ${Math.floor((uptimeSeconds % 3600) / 60)}m ${uptimeSeconds % 60}s\``, inline: true },
+        { name: "Guild Members", value: `\`${guild.memberCount}\``, inline: true },
+        { name: "Active Tickets", value: `\`${activeTickets}\``, inline: true },
+        { name: "Active Giveaways", value: `\`${activeGiveaways.size}\``, inline: true },
+        { name: "Scheduled Messages", value: `\`${Object.keys(messageStore.scheduled || {}).length}\``, inline: true },
+        { name: "State File", value: "`sam_bot_state.json`", inline: true },
+        { name: "Config Persistence", value: "✅ Enabled", inline: true }
+    );
+
+    return {
+        embeds: [embed],
+        components: [
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId("adminpanel_status").setLabel("Refresh Status").setEmoji("🔄").setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId("adminpanel_home").setLabel("Back").setEmoji("⬅️").setStyle(ButtonStyle.Secondary)
+            )
+        ]
+    };
+}
+
+function buildProtectionThresholdModal() {
+    const modal = new ModalBuilder()
+        .setCustomId("adminpanel_protection_modal")
+        .setTitle("Protection Thresholds");
+
+    const values = [
+        ["admin_spam_limit", "Spam message limit (3-20)", String(SPAM_LIMIT)],
+        ["admin_spam_window", "Spam window seconds (3-60)", String(Math.round(SPAM_WINDOW_MS / 1000))],
+        ["admin_spam_timeout", "Timeout minutes (1-1440)", String(Math.round(SPAM_TIMEOUT_MS / 60000))],
+        ["admin_mention_limit", "Mention limit (3-50)", String(MENTION_LIMIT)]
+    ];
+
+    for (const [id, label, value] of values) {
+        modal.addComponents(new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+                .setCustomId(id)
+                .setLabel(label)
+                .setStyle(TextInputStyle.Short)
+                .setRequired(true)
+                .setValue(value)
+        ));
+    }
+    return modal;
+}
+
+function buildAdminColorsModal() {
+    const modal = new ModalBuilder()
+        .setCustomId("adminpanel_colors_modal")
+        .setTitle("Premium Log Colours");
+
+    const values = [
+        ["admin_mod_color", "Moderation colour", hexColor(runtimeSettings.moderationColor)],
+        ["admin_ticket_color", "Ticket colour", hexColor(runtimeSettings.ticketColor)],
+        ["admin_role_color", "Role colour", hexColor(runtimeSettings.roleColor)],
+        ["admin_join_color", "Join colour", hexColor(runtimeSettings.joinColor)],
+        ["admin_delete_color", "Delete / critical colour", hexColor(runtimeSettings.deleteColor)]
+    ];
+
+    for (const [id, label, value] of values) {
+        modal.addComponents(new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+                .setCustomId(id)
+                .setLabel(label)
+                .setStyle(TextInputStyle.Short)
+                .setRequired(true)
+                .setMaxLength(7)
+                .setValue(value)
+        ));
+    }
+    return modal;
+}
+
+function buildAdminFooterModal() {
+    return new ModalBuilder()
+        .setCustomId("adminpanel_footer_modal")
+        .setTitle("Premium Log Footer")
+        .addComponents(new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+                .setCustomId("admin_log_footer")
+                .setLabel("Footer text")
+                .setStyle(TextInputStyle.Short)
+                .setRequired(true)
+                .setMaxLength(150)
+                .setValue(String(runtimeSettings.logFooter || "").slice(0, 150))
+        ));
+}
+
+async function logAdminPanelChange(interaction, title, fields = []) {
+    const embed = makeLogEmbed({
+        title,
+        color: ADMIN_PANEL_COLOR,
+        emoji: "⚙️",
+        user: interaction.user
+    }).addFields(
+        ...fields,
+        { name: "Changed By", value: userLabel(interaction.user), inline: false }
+    );
+
+    await sendLog(interaction.guild, LOG_CHANNELS.SERVER || LOG_CHANNELS.MOD, embed);
+}
+
 // ================= TIME PARSER =================
 function parseDuration(durationStr) {
     const timeUnits = {
@@ -1969,6 +2559,72 @@ const commands = [
         ),
 
     new SlashCommandBuilder()
+        .setName("adminpanel")
+        .setDescription("Open the interactive SAM STUDIO Discord admin panel")
+        .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
+        .setDMPermission(false),
+
+    new SlashCommandBuilder()
+        .setName("settings")
+        .setDescription("Open and manage the SAM STUDIO admin settings")
+        .addSubcommand(sub =>
+            sub.setName("view").setDescription("View the current bot settings")
+        )
+        .addSubcommand(sub =>
+            sub.setName("log")
+                .setDescription("Set a log channel")
+                .addStringOption(o =>
+                    o.setName("type").setDescription("Log category").setRequired(true)
+                        .addChoices(
+                            { name: "Moderation", value: "MOD" },
+                            { name: "Tickets", value: "TICKET" },
+                            { name: "Messages", value: "MSG" },
+                            { name: "Voice", value: "VC" },
+                            { name: "Join / Leave", value: "JOIN" },
+                            { name: "Roles", value: "ROLE" },
+                            { name: "Server", value: "SERVER" },
+                            { name: "Invites", value: "INVITE" },
+                            { name: "Nickname", value: "NICKNAME" }
+                        )
+                )
+                .addChannelOption(o =>
+                    o.setName("channel").setDescription("Destination log channel").setRequired(true)
+                        .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+                )
+        )
+        .addSubcommand(sub =>
+            sub.setName("staff")
+                .setDescription("Set the ticket staff role")
+                .addRoleOption(o => o.setName("role").setDescription("Staff role").setRequired(true))
+        )
+        .addSubcommand(sub =>
+            sub.setName("closed_category")
+                .setDescription("Set the closed-ticket category")
+                .addChannelOption(o =>
+                    o.setName("category").setDescription("Closed ticket category").setRequired(true)
+                        .addChannelTypes(ChannelType.GuildCategory)
+                )
+        )
+        .addSubcommand(sub =>
+            sub.setName("protection")
+                .setDescription("Set anti-spam and mention thresholds")
+                .addIntegerOption(o => o.setName("spam_limit").setDescription("Messages before spam trigger (3-20)").setMinValue(3).setMaxValue(20))
+                .addIntegerOption(o => o.setName("spam_window_seconds").setDescription("Spam window in seconds (3-60)").setMinValue(3).setMaxValue(60))
+                .addIntegerOption(o => o.setName("spam_timeout_minutes").setDescription("Repeated-spam timeout (1-1440 min)").setMinValue(1).setMaxValue(1440))
+                .addIntegerOption(o => o.setName("mention_limit").setDescription("Mentions before mass-mention trigger (3-50)").setMinValue(3).setMaxValue(50))
+        )
+        .addSubcommand(sub =>
+            sub.setName("appearance")
+                .setDescription("Set premium log footer and theme colours")
+                .addStringOption(o => o.setName("footer").setDescription("Log footer text").setMaxLength(150))
+                .addStringOption(o => o.setName("moderation_color").setDescription("Hex, e.g. #E67E22").setMaxLength(7))
+                .addStringOption(o => o.setName("ticket_color").setDescription("Hex, e.g. #9B59B6").setMaxLength(7))
+                .addStringOption(o => o.setName("role_color").setDescription("Hex, e.g. #3498DB").setMaxLength(7))
+                .addStringOption(o => o.setName("join_color").setDescription("Hex, e.g. #57F287").setMaxLength(7))
+                .addStringOption(o => o.setName("delete_color").setDescription("Hex, e.g. #ED4245").setMaxLength(7))
+        ),
+
+    new SlashCommandBuilder()
         .setName("protection")
         .setDescription("Configure existing spam/link/mention protection")
         .addStringOption(o =>
@@ -2079,6 +2735,7 @@ client.on(
     async (interaction) => {
 
         try {
+            rememberInteractionLocale(interaction);
 
             // =================================================
             // SLASH COMMANDS
@@ -2090,6 +2747,223 @@ client.on(
 
                 const cmd =
                     interaction.commandName;
+
+                // ================= DIRECT ADMIN PANEL =================
+
+                if (cmd === "adminpanel") {
+                    if (!adminPanelAllowed(interaction)) {
+                        return interaction.reply({
+                            content: "❌ Administrator permission required.",
+                            flags: MessageFlags.Ephemeral
+                        });
+                    }
+
+                    return interaction.reply({
+                        ...buildAdminHome(interaction),
+                        flags: MessageFlags.Ephemeral
+                    });
+                }
+
+                // ================= SETTINGS PANEL =================
+
+                if (cmd === "settings") {
+                    if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+                        return interaction.reply({
+                            content: "❌ Administrator permission required.",
+                            flags: MessageFlags.Ephemeral
+                        });
+                    }
+
+                    const sub = interaction.options.getSubcommand();
+
+                    if (sub === "view") {
+                        const logLines = Object.entries(LOG_CHANNELS)
+                            .map(([key, id]) => `**${key}:** ${id ? `<#${id}>` : "`Not configured`"}`)
+                            .join("\n");
+
+                        const embed = makeLogEmbed({
+                            title: "SAM STUDIO Settings Panel",
+                            color: 0x5865F2,
+                            emoji: "⚙️",
+                            description: "Current runtime settings. Changes made here are saved to `sam_bot_state.json` and survive bot restarts."
+                        }).addFields(
+                            { name: "🎫 Ticket Staff Role", value: STAFF_ROLE_ID ? `<@&${STAFF_ROLE_ID}> • \`${STAFF_ROLE_ID}\`` : "Not configured", inline: false },
+                            { name: "📁 Closed Ticket Category", value: CLOSED_CATEGORY_ID ? `<#${CLOSED_CATEGORY_ID}> • \`${CLOSED_CATEGORY_ID}\`` : "Not configured", inline: false },
+                            { name: "📋 Log Channels", value: trimText(logLines, 1024), inline: false },
+                            {
+                                name: "🛡️ Protection Thresholds",
+                                value:
+                                    `Spam: **${SPAM_LIMIT} messages / ${Math.round(SPAM_WINDOW_MS / 1000)} sec**\n` +
+                                    `Repeated-spam timeout: **${Math.round(SPAM_TIMEOUT_MS / 60000)} min**\n` +
+                                    `Mass mention limit: **${MENTION_LIMIT} mentions**`,
+                                inline: false
+                            },
+                            {
+                                name: "🎨 Premium Log Theme",
+                                value:
+                                    `Moderation: \`${hexColor(runtimeSettings.moderationColor)}\`\n` +
+                                    `Ticket: \`${hexColor(runtimeSettings.ticketColor)}\`\n` +
+                                    `Role: \`${hexColor(runtimeSettings.roleColor)}\`\n` +
+                                    `Join: \`${hexColor(runtimeSettings.joinColor)}\`\n` +
+                                    `Delete/Critical: \`${hexColor(runtimeSettings.deleteColor)}\``,
+                                inline: false
+                            },
+                            { name: "📝 Footer", value: trimText(runtimeSettings.logFooter, 1024), inline: false }
+                        );
+
+                        return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+                    }
+
+                    if (sub === "log") {
+                        const type = interaction.options.getString("type");
+                        const channel = interaction.options.getChannel("channel");
+                        LOG_CHANNELS[type] = channel.id;
+                        saveBotState();
+
+                        return interaction.reply({
+                            embeds: [makeLogEmbed({
+                                title: "Log Channel Updated",
+                                color: 0x57F287,
+                                emoji: "✅"
+                            }).addFields(
+                                { name: "Category", value: `\`${type}\``, inline: true },
+                                { name: "Channel", value: formatChannel(channel), inline: false },
+                                { name: "Changed By", value: userLabel(interaction.user), inline: false }
+                            )],
+                            flags: MessageFlags.Ephemeral
+                        });
+                    }
+
+                    if (sub === "staff") {
+                        const role = interaction.options.getRole("role");
+                        if (role.managed || role.id === interaction.guild.id) {
+                            return interaction.reply({
+                                content: "❌ Select a normal server role.",
+                                flags: MessageFlags.Ephemeral
+                            });
+                        }
+
+                        const previousRoleId = STAFF_ROLE_ID;
+                        STAFF_ROLE_ID = role.id;
+                        saveBotState();
+                        await syncTicketStaffPermissions(interaction.guild);
+
+                        if (previousRoleId && previousRoleId !== STAFF_ROLE_ID) {
+                            const ticketChannels = interaction.guild.channels.cache.filter(channel =>
+                                channel.type === ChannelType.GuildText &&
+                                channel.topic?.includes("sam-ticket-user:")
+                            );
+                            for (const [, channel] of ticketChannels) {
+                                await channel.permissionOverwrites.delete(previousRoleId).catch(() => {});
+                            }
+                        }
+
+                        return interaction.reply({
+                            embeds: [makeLogEmbed({
+                                title: "Ticket Staff Role Updated",
+                                color: 0x57F287,
+                                emoji: "🎫"
+                            }).addFields(
+                                { name: "New Staff Role", value: `${role} • \`${role.id}\``, inline: false },
+                                { name: "Changed By", value: userLabel(interaction.user), inline: false }
+                            )],
+                            flags: MessageFlags.Ephemeral
+                        });
+                    }
+
+                    if (sub === "closed_category") {
+                        const category = interaction.options.getChannel("category");
+                        CLOSED_CATEGORY_ID = category.id;
+                        saveBotState();
+
+                        return interaction.reply({
+                            embeds: [makeLogEmbed({
+                                title: "Closed Ticket Category Updated",
+                                color: runtimeSettings.ticketColor,
+                                emoji: "📁"
+                            }).addFields(
+                                { name: "Category", value: `${category.name} • \`${category.id}\``, inline: false },
+                                { name: "Changed By", value: userLabel(interaction.user), inline: false }
+                            )],
+                            flags: MessageFlags.Ephemeral
+                        });
+                    }
+
+                    if (sub === "protection") {
+                        const spamLimit = interaction.options.getInteger("spam_limit");
+                        const spamWindowSeconds = interaction.options.getInteger("spam_window_seconds");
+                        const spamTimeoutMinutes = interaction.options.getInteger("spam_timeout_minutes");
+                        const mentionLimit = interaction.options.getInteger("mention_limit");
+
+                        if ([spamLimit, spamWindowSeconds, spamTimeoutMinutes, mentionLimit].every(value => value == null)) {
+                            return interaction.reply({
+                                content: "❌ Set at least one protection value.",
+                                flags: MessageFlags.Ephemeral
+                            });
+                        }
+
+                        if (spamLimit != null) SPAM_LIMIT = spamLimit;
+                        if (spamWindowSeconds != null) SPAM_WINDOW_MS = spamWindowSeconds * 1000;
+                        if (spamTimeoutMinutes != null) SPAM_TIMEOUT_MS = spamTimeoutMinutes * 60_000;
+                        if (mentionLimit != null) MENTION_LIMIT = mentionLimit;
+                        saveBotState();
+
+                        const embed = makeLogEmbed({
+                            title: "Protection Settings Updated",
+                            color: runtimeSettings.moderationColor,
+                            emoji: "🛡️"
+                        }).addFields(
+                            { name: "Spam Trigger", value: `${SPAM_LIMIT} messages / ${Math.round(SPAM_WINDOW_MS / 1000)} sec`, inline: true },
+                            { name: "Spam Timeout", value: `${Math.round(SPAM_TIMEOUT_MS / 60000)} min`, inline: true },
+                            { name: "Mention Limit", value: `${MENTION_LIMIT}`, inline: true },
+                            { name: "Changed By", value: userLabel(interaction.user), inline: false }
+                        );
+
+                        await sendLog(interaction.guild, LOG_CHANNELS.MOD, embed);
+                        return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+                    }
+
+                    if (sub === "appearance") {
+                        const footer = interaction.options.getString("footer");
+                        const moderationColor = interaction.options.getString("moderation_color");
+                        const ticketColor = interaction.options.getString("ticket_color");
+                        const roleColor = interaction.options.getString("role_color");
+                        const joinColor = interaction.options.getString("join_color");
+                        const deleteColor = interaction.options.getString("delete_color");
+
+                        try {
+                            if (footer != null && footer.trim()) runtimeSettings.logFooter = footer.trim();
+                            runtimeSettings.moderationColor = parseSettingsColor(moderationColor, runtimeSettings.moderationColor);
+                            runtimeSettings.ticketColor = parseSettingsColor(ticketColor, runtimeSettings.ticketColor);
+                            runtimeSettings.roleColor = parseSettingsColor(roleColor, runtimeSettings.roleColor);
+                            runtimeSettings.joinColor = parseSettingsColor(joinColor, runtimeSettings.joinColor);
+                            runtimeSettings.deleteColor = parseSettingsColor(deleteColor, runtimeSettings.deleteColor);
+                        } catch (error) {
+                            return interaction.reply({
+                                content: `❌ ${error.message}`,
+                                flags: MessageFlags.Ephemeral
+                            });
+                        }
+
+                        saveBotState();
+
+                        const embed = makeLogEmbed({
+                            title: "Premium Log Appearance Updated",
+                            color: 0x5865F2,
+                            emoji: "🎨"
+                        }).addFields(
+                            { name: "Footer", value: trimText(runtimeSettings.logFooter, 1024), inline: false },
+                            { name: "Moderation", value: `\`${hexColor(runtimeSettings.moderationColor)}\``, inline: true },
+                            { name: "Ticket", value: `\`${hexColor(runtimeSettings.ticketColor)}\``, inline: true },
+                            { name: "Role", value: `\`${hexColor(runtimeSettings.roleColor)}\``, inline: true },
+                            { name: "Join", value: `\`${hexColor(runtimeSettings.joinColor)}\``, inline: true },
+                            { name: "Delete/Critical", value: `\`${hexColor(runtimeSettings.deleteColor)}\``, inline: true },
+                            { name: "Changed By", value: userLabel(interaction.user), inline: false }
+                        );
+
+                        return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+                    }
+                }
 
                 // ================= ANTI PING / PROTECTION =================
 
@@ -2572,7 +3446,9 @@ client.on(
                         { name: "📌 Action", value: actionDetail, inline: true },
                         { name: "📝 Reason", value: trimText(reason, 1024), inline: false },
                         { name: "💬 Channel", value: formatChannel(interaction.channel), inline: false },
-                        { name: "🌐 Command Locale", value: `\`${interaction.locale || "Unknown"}\``, inline: true }
+                        { name: "🖥️ Target Client", value: clientPlatformLabel(target), inline: true },
+                        { name: "🌐 Target Known Language", value: knownLocaleLabel(target.id), inline: false },
+                        { name: "🌐 Moderator Command Locale", value: `\`${interaction.locale || "Unknown"}\``, inline: true }
                     );
 
                     await sendLog(interaction.guild, LOG_CHANNELS.MOD, log);
@@ -2627,7 +3503,10 @@ client.on(
                         { name: "👤 Member", value: userLabel(target.user), inline: false },
                         { name: "🛡️ Moderator", value: userLabel(interaction.user), inline: false },
                         { name: "📊 Total Warnings", value: `**${history.length}**`, inline: true },
-                        { name: "📝 Reason", value: trimText(reason, 1024), inline: false }
+                        { name: "📝 Reason", value: trimText(reason, 1024), inline: false },
+                        { name: "💬 Channel", value: formatChannel(interaction.channel), inline: false },
+                        { name: "🖥️ Client", value: clientPlatformLabel(target), inline: true },
+                        { name: "🌐 Known Language", value: knownLocaleLabel(target.id), inline: false }
                     );
 
                     await sendLog(interaction.guild, LOG_CHANNELS.MOD, log);
@@ -3019,13 +3898,20 @@ client.on(
                         { name: `🎭 Roles (${roles.length})`, value: roleText, inline: false }
                     );
 
-                    if (target.id === interaction.user.id) {
-                        embed.addFields({
-                            name: "🌐 Discord Client Language",
-                            value: `\`${interaction.locale || "Unknown"}\`\n*This is a language/locale setting, not an IP address or verified country.*`,
+                    embed.addFields(
+                        {
+                            name: "🖥️ Discord Client Platform",
+                            value: clientPlatformLabel(target),
+                            inline: true
+                        },
+                        {
+                            name: "🌐 Known Discord Language",
+                            value: target.id === interaction.user.id
+                                ? `\`${interaction.locale || "Unknown"}\`\n*Language/locale only — not an IP address or verified country.*`
+                                : knownLocaleLabel(target.id),
                             inline: false
-                        });
-                    }
+                        }
+                    );
 
                     return interaction.reply({ embeds: [embed] });
                 }
@@ -3149,6 +4035,87 @@ client.on(
             if (
                 interaction.isModalSubmit()
             ) {
+
+                // ============ DIRECT ADMIN PANEL MODALS ============
+
+                if (interaction.customId.startsWith("adminpanel_")) {
+                    if (!adminPanelAllowed(interaction)) {
+                        return interaction.reply({ content: "❌ Administrator permission required.", flags: MessageFlags.Ephemeral });
+                    }
+
+                    if (interaction.customId === "adminpanel_protection_modal") {
+                        const spamLimit = Number(interaction.fields.getTextInputValue("admin_spam_limit"));
+                        const spamWindow = Number(interaction.fields.getTextInputValue("admin_spam_window"));
+                        const spamTimeout = Number(interaction.fields.getTextInputValue("admin_spam_timeout"));
+                        const mentionLimit = Number(interaction.fields.getTextInputValue("admin_mention_limit"));
+
+                        if (!Number.isInteger(spamLimit) || spamLimit < 3 || spamLimit > 20 ||
+                            !Number.isInteger(spamWindow) || spamWindow < 3 || spamWindow > 60 ||
+                            !Number.isInteger(spamTimeout) || spamTimeout < 1 || spamTimeout > 1440 ||
+                            !Number.isInteger(mentionLimit) || mentionLimit < 3 || mentionLimit > 50) {
+                            return interaction.reply({
+                                content: "❌ Invalid values. Spam limit 3-20, window 3-60 sec, timeout 1-1440 min, mention limit 3-50.",
+                                flags: MessageFlags.Ephemeral
+                            });
+                        }
+
+                        SPAM_LIMIT = spamLimit;
+                        SPAM_WINDOW_MS = spamWindow * 1000;
+                        SPAM_TIMEOUT_MS = spamTimeout * 60_000;
+                        MENTION_LIMIT = mentionLimit;
+                        saveBotState();
+
+                        await logAdminPanelChange(interaction, "Protection Thresholds Updated", [
+                            { name: "Spam Trigger", value: `${SPAM_LIMIT} / ${spamWindow}s`, inline: true },
+                            { name: "Timeout", value: `${spamTimeout} min`, inline: true },
+                            { name: "Mention Limit", value: String(MENTION_LIMIT), inline: true }
+                        ]);
+
+                        if (interaction.isFromMessage?.()) {
+                            return interaction.update(buildAdminProtection(null, interaction.guild));
+                        }
+                        return interaction.reply({ ...buildAdminProtection(null, interaction.guild), flags: MessageFlags.Ephemeral });
+                    }
+
+                    if (interaction.customId === "adminpanel_colors_modal") {
+                        try {
+                            runtimeSettings.moderationColor = parseSettingsColor(interaction.fields.getTextInputValue("admin_mod_color"), runtimeSettings.moderationColor);
+                            runtimeSettings.ticketColor = parseSettingsColor(interaction.fields.getTextInputValue("admin_ticket_color"), runtimeSettings.ticketColor);
+                            runtimeSettings.roleColor = parseSettingsColor(interaction.fields.getTextInputValue("admin_role_color"), runtimeSettings.roleColor);
+                            runtimeSettings.joinColor = parseSettingsColor(interaction.fields.getTextInputValue("admin_join_color"), runtimeSettings.joinColor);
+                            runtimeSettings.deleteColor = parseSettingsColor(interaction.fields.getTextInputValue("admin_delete_color"), runtimeSettings.deleteColor);
+                        } catch (error) {
+                            return interaction.reply({ content: `❌ ${error.message}`, flags: MessageFlags.Ephemeral });
+                        }
+
+                        saveBotState();
+                        await logAdminPanelChange(interaction, "Premium Log Colours Updated", [
+                            { name: "Moderation", value: hexColor(runtimeSettings.moderationColor), inline: true },
+                            { name: "Ticket", value: hexColor(runtimeSettings.ticketColor), inline: true },
+                            { name: "Role", value: hexColor(runtimeSettings.roleColor), inline: true },
+                            { name: "Join", value: hexColor(runtimeSettings.joinColor), inline: true },
+                            { name: "Delete", value: hexColor(runtimeSettings.deleteColor), inline: true }
+                        ]);
+
+                        if (interaction.isFromMessage?.()) return interaction.update(buildAdminAppearance());
+                        return interaction.reply({ ...buildAdminAppearance(), flags: MessageFlags.Ephemeral });
+                    }
+
+                    if (interaction.customId === "adminpanel_footer_modal") {
+                        const footer = interaction.fields.getTextInputValue("admin_log_footer").trim();
+                        if (!footer) {
+                            return interaction.reply({ content: "❌ Footer cannot be empty.", flags: MessageFlags.Ephemeral });
+                        }
+                        runtimeSettings.logFooter = footer.slice(0, 150);
+                        saveBotState();
+                        await logAdminPanelChange(interaction, "Premium Log Footer Updated", [
+                            { name: "Footer", value: trimText(runtimeSettings.logFooter, 1024), inline: false }
+                        ]);
+
+                        if (interaction.isFromMessage?.()) return interaction.update(buildAdminAppearance());
+                        return interaction.reply({ ...buildAdminAppearance(), flags: MessageFlags.Ephemeral });
+                    }
+                }
 
                 // ============ ADVANCED MSG MAIN FORM ============
 
@@ -3551,6 +4518,117 @@ client.on(
             }
 
             // =================================================
+            // DIRECT ADMIN PANEL SELECT MENUS
+            // =================================================
+
+            if (interaction.isRoleSelectMenu?.() && interaction.customId === "adminpanel_staff_role") {
+                if (!adminPanelAllowed(interaction)) {
+                    return interaction.reply({ content: "❌ Administrator permission required.", flags: MessageFlags.Ephemeral });
+                }
+
+                const role = interaction.roles?.first?.() || interaction.guild.roles.cache.get(interaction.values?.[0]);
+                if (!role || role.managed || role.id === interaction.guild.id) {
+                    return interaction.reply({ content: "❌ Select a normal server role.", flags: MessageFlags.Ephemeral });
+                }
+
+                const previousRoleId = STAFF_ROLE_ID;
+                STAFF_ROLE_ID = role.id;
+                saveBotState();
+                await syncTicketStaffPermissions(interaction.guild);
+
+                if (previousRoleId && previousRoleId !== STAFF_ROLE_ID) {
+                    const ticketChannels = interaction.guild.channels.cache.filter(channel =>
+                        channel.type === ChannelType.GuildText && channel.topic?.includes("sam-ticket-user:")
+                    );
+                    for (const [, channel] of ticketChannels) {
+                        await channel.permissionOverwrites.delete(previousRoleId).catch(() => {});
+                    }
+                }
+
+                await logAdminPanelChange(interaction, "Ticket Staff Role Updated", [
+                    { name: "New Staff Role", value: `${role} • \`${role.id}\``, inline: false }
+                ]);
+                return interaction.update(buildAdminTickets(interaction));
+            }
+
+            if (interaction.isChannelSelectMenu?.() && interaction.customId.startsWith("adminpanel_")) {
+                if (!adminPanelAllowed(interaction)) {
+                    return interaction.reply({ content: "❌ Administrator permission required.", flags: MessageFlags.Ephemeral });
+                }
+
+                const channel = interaction.channels?.first?.() || interaction.guild.channels.cache.get(interaction.values?.[0]);
+                if (!channel) {
+                    return interaction.reply({ content: "❌ Selected channel/category could not be found.", flags: MessageFlags.Ephemeral });
+                }
+
+                if (interaction.customId === "adminpanel_closed_category") {
+                    if (channel.type !== ChannelType.GuildCategory) {
+                        return interaction.reply({ content: "❌ Select a category.", flags: MessageFlags.Ephemeral });
+                    }
+                    CLOSED_CATEGORY_ID = channel.id;
+                    saveBotState();
+                    await logAdminPanelChange(interaction, "Closed Ticket Category Updated", [
+                        { name: "Category", value: `${channel.name} • \`${channel.id}\``, inline: false }
+                    ]);
+                    return interaction.update(buildAdminTickets(interaction));
+                }
+
+                if (interaction.customId.startsWith("adminpanel_ticket_category_channel:")) {
+                    const type = interaction.customId.split(":")[1];
+                    if (!CATEGORY_IDS.hasOwnProperty(type) || channel.type !== ChannelType.GuildCategory) {
+                        return interaction.reply({ content: "❌ Invalid ticket category selection.", flags: MessageFlags.Ephemeral });
+                    }
+                    CATEGORY_IDS[type] = channel.id;
+                    saveBotState();
+                    await logAdminPanelChange(interaction, "Ticket Category Updated", [
+                        { name: "Ticket Type", value: TICKET_LABELS[type] || type, inline: true },
+                        { name: "Category", value: `${channel.name} • \`${channel.id}\``, inline: false }
+                    ]);
+                    return interaction.update(buildAdminTickets(interaction, type));
+                }
+
+                if (interaction.customId.startsWith("adminpanel_log_channel:")) {
+                    const type = interaction.customId.split(":")[1];
+                    if (!ADMIN_LOG_LABELS[type]) {
+                        return interaction.reply({ content: "❌ Invalid log category.", flags: MessageFlags.Ephemeral });
+                    }
+                    LOG_CHANNELS[type] = channel.id;
+                    saveBotState();
+                    await logAdminPanelChange(interaction, "Log Destination Updated", [
+                        { name: "Log Type", value: ADMIN_LOG_LABELS[type], inline: true },
+                        { name: "Channel", value: formatChannel(channel), inline: false }
+                    ]);
+                    return interaction.update(buildAdminLogs(type));
+                }
+
+                if (interaction.customId === "adminpanel_protection_channel") {
+                    return interaction.update(buildAdminProtection(channel.id, interaction.guild));
+                }
+            }
+
+            if (interaction.isStringSelectMenu() && interaction.customId === "adminpanel_log_type") {
+                if (!adminPanelAllowed(interaction)) {
+                    return interaction.reply({ content: "❌ Administrator permission required.", flags: MessageFlags.Ephemeral });
+                }
+                const type = interaction.values[0];
+                if (!ADMIN_LOG_LABELS[type]) {
+                    return interaction.reply({ content: "❌ Invalid log category.", flags: MessageFlags.Ephemeral });
+                }
+                return interaction.update(buildAdminLogs(type));
+            }
+
+            if (interaction.isStringSelectMenu() && interaction.customId === "adminpanel_ticket_category_type") {
+                if (!adminPanelAllowed(interaction)) {
+                    return interaction.reply({ content: "❌ Administrator permission required.", flags: MessageFlags.Ephemeral });
+                }
+                const type = interaction.values[0];
+                if (!CATEGORY_IDS.hasOwnProperty(type)) {
+                    return interaction.reply({ content: "❌ Invalid ticket category.", flags: MessageFlags.Ephemeral });
+                }
+                return interaction.update(buildAdminTickets(interaction, type));
+            }
+
+            // =================================================
             // TICKET SELECT MENU
             // =================================================
 
@@ -3711,6 +4789,65 @@ client.on(
             if (
                 interaction.isButton()
             ) {
+
+                // ============== DIRECT ADMIN PANEL BUTTONS ==============
+
+                if (interaction.customId.startsWith("adminpanel_")) {
+                    if (!adminPanelAllowed(interaction)) {
+                        return interaction.reply({ content: "❌ Administrator permission required.", flags: MessageFlags.Ephemeral });
+                    }
+
+                    const id = interaction.customId;
+                    if (id === "adminpanel_home" || id === "adminpanel_refresh") {
+                        return interaction.update(buildAdminHome(interaction));
+                    }
+                    if (id === "adminpanel_tickets") return interaction.update(buildAdminTickets(interaction));
+                    if (id === "adminpanel_logs") return interaction.update(buildAdminLogs());
+                    if (id === "adminpanel_protection") return interaction.update(buildAdminProtection(null, interaction.guild));
+                    if (id === "adminpanel_appearance") return interaction.update(buildAdminAppearance());
+                    if (id === "adminpanel_status") return interaction.update(buildAdminStatus(interaction));
+                    if (id === "adminpanel_close") {
+                        return interaction.update({ content: "✅ Admin panel closed.", embeds: [], components: [] });
+                    }
+                    if (id === "adminpanel_protection_thresholds") {
+                        return interaction.showModal(buildProtectionThresholdModal());
+                    }
+                    if (id === "adminpanel_edit_colors") {
+                        return interaction.showModal(buildAdminColorsModal());
+                    }
+                    if (id === "adminpanel_edit_footer") {
+                        return interaction.showModal(buildAdminFooterModal());
+                    }
+                    if (id.startsWith("adminpanel_prot_toggle:")) {
+                        const [, type, channelId] = id.split(":");
+                        const channel = interaction.guild.channels.cache.get(channelId);
+                        if (!channel) {
+                            return interaction.reply({ content: "❌ Channel no longer exists.", flags: MessageFlags.Ephemeral });
+                        }
+
+                        const mapping = {
+                            spam: antiSpamChannels,
+                            link: antiLinkChannels,
+                            mention: antiMentionChannels
+                        };
+                        const targetSet = mapping[type];
+                        if (!targetSet) {
+                            return interaction.reply({ content: "❌ Invalid protection type.", flags: MessageFlags.Ephemeral });
+                        }
+
+                        const wasEnabled = targetSet.has(channelId);
+                        if (wasEnabled) targetSet.delete(channelId);
+                        else targetSet.add(channelId);
+                        saveBotState();
+
+                        await logAdminPanelChange(interaction, "Channel Protection Updated", [
+                            { name: "Channel", value: formatChannel(channel), inline: false },
+                            { name: "Protection", value: type.toUpperCase(), inline: true },
+                            { name: "Status", value: wasEnabled ? "Disabled" : "Enabled", inline: true }
+                        ]);
+                        return interaction.update(buildAdminProtection(channelId, interaction.guild));
+                    }
+                }
 
                 // ============== MSG PREVIEW BUTTONS ==============
 
@@ -4350,9 +5487,17 @@ client.on(
 
         const attachments = message.attachments?.size
             ? Array.from(message.attachments.values())
-                .map(a => `[${a.name || "Attachment"}](${a.url})`)
+                .map(a => {
+                    const type = a.contentType || "unknown type";
+                    const size = Number.isFinite(a.size) ? `${Math.max(1, Math.round(a.size / 1024))} KB` : "unknown size";
+                    return `[${a.name || "Attachment"}](${a.url})\n\`${type}\` • ${size}`;
+                })
                 .join("\n")
             : "None";
+
+        const executor = message.author
+            ? await getRecentAuditExecutor(message.guild, AuditLogEvent.MessageDelete, message.author.id)
+            : null;
 
         const embed = makeLogEmbed({
             title: "Message Deleted",
@@ -4363,6 +5508,7 @@ client.on(
             { name: "👤 Author", value: userLabel(message.author), inline: false },
             { name: "💬 Channel", value: formatChannel(message.channel), inline: false },
             { name: "🆔 Message ID", value: `\`${message.id}\``, inline: true },
+            { name: "🛡️ Deleted By", value: executor ? userLabel(executor) : "Self-delete / unknown / audit log unavailable", inline: false },
             { name: "📝 Content", value: trimText(message.content || "No text content / message was uncached", 1024), inline: false },
             { name: "📎 Attachments", value: trimText(attachments, 1024), inline: false }
         );
@@ -4499,7 +5645,9 @@ client.on(
                         value: removed.size ? trimText(removed.map(r => `${r} • \`${r.id}\``).join("\n"), 1024) : "None",
                         inline: false
                     },
-                    { name: "🛡️ Changed By", value: executor ? userLabel(executor) : "Unknown / bot could not read audit log", inline: false }
+                    { name: "🛡️ Changed By", value: executor ? userLabel(executor) : "Unknown / bot could not read audit log", inline: false },
+                    { name: "🖥️ Client", value: clientPlatformLabel(newMember), inline: true },
+                    { name: "🌐 Known Language", value: knownLocaleLabel(newMember.id), inline: false }
                 );
 
                 await sendLog(newMember.guild, LOG_CHANNELS.ROLE, embed);
@@ -4522,7 +5670,9 @@ client.on(
                 { name: "👤 Member", value: userLabel(newMember.user), inline: false },
                 { name: "⬅️ Old Nickname", value: trimText(oldMember.nickname || "None", 1024), inline: true },
                 { name: "➡️ New Nickname", value: trimText(newMember.nickname || "None", 1024), inline: true },
-                { name: "🛡️ Changed By", value: executor ? userLabel(executor) : "Unknown / self-change / audit log unavailable", inline: false }
+                { name: "🛡️ Changed By", value: executor ? userLabel(executor) : "Unknown / self-change / audit log unavailable", inline: false },
+                { name: "🖥️ Client", value: clientPlatformLabel(newMember), inline: true },
+                { name: "🌐 Known Language", value: knownLocaleLabel(newMember.id), inline: false }
             );
 
             await sendLog(newMember.guild, LOG_CHANNELS.NICKNAME, embed);
@@ -4545,19 +5695,25 @@ client.on(Events.GuildUpdate, async (oldGuild, newGuild) => {
     if (oldGuild.preferredLocale !== newGuild.preferredLocale) changes.push(`**Preferred Locale:** ${oldGuild.preferredLocale} → ${newGuild.preferredLocale}`);
     if (!changes.length) return;
 
+    const executor = await getRecentAuditExecutor(newGuild, AuditLogEvent.GuildUpdate, newGuild.id);
     const embed = makeLogEmbed({
         title: "Server Settings Updated",
         color: 0x5865f2,
         emoji: "⚙️",
-        description: trimText(changes.join("\n"), 3900),
-        footer: `Server ID: ${newGuild.id} • SAM STUDIO`
-    }).setThumbnail(newGuild.iconURL({ extension: "png", size: 256, forceStatic: false }));
+        description: trimText(changes.join("\n"), 3900)
+    })
+        .setThumbnail(newGuild.iconURL({ extension: "png", size: 256, forceStatic: false }))
+        .addFields(
+            { name: "Server", value: `\`${newGuild.name}\` • \`${newGuild.id}\``, inline: false },
+            { name: "🛡️ Changed By", value: executor ? userLabel(executor) : "Unknown / audit log unavailable", inline: false }
+        );
 
     await sendLog(newGuild, LOG_CHANNELS.SERVER, embed);
 });
 
 client.on(Events.ChannelCreate, async channel => {
     if (!channel.guild || !LOG_CHANNELS.SERVER) return;
+    const executor = await getRecentAuditExecutor(channel.guild, AuditLogEvent.ChannelCreate, channel.id);
     const embed = makeLogEmbed({
         title: "Channel Created",
         color: 0x57f287,
@@ -4565,21 +5721,24 @@ client.on(Events.ChannelCreate, async channel => {
     }).addFields(
         { name: "Channel", value: formatChannel(channel), inline: false },
         { name: "Type", value: `\`${channel.type}\``, inline: true },
-        { name: "Category", value: channel.parent ? formatChannel(channel.parent) : "None", inline: false }
+        { name: "Category", value: channel.parent ? formatChannel(channel.parent) : "None", inline: false },
+        { name: "🛡️ Created By", value: executor ? userLabel(executor) : "Unknown / audit log unavailable", inline: false }
     );
     await sendLog(channel.guild, LOG_CHANNELS.SERVER, embed);
 });
 
 client.on(Events.ChannelDelete, async channel => {
     if (!channel.guild || !LOG_CHANNELS.SERVER) return;
+    const executor = await getRecentAuditExecutor(channel.guild, AuditLogEvent.ChannelDelete, channel.id);
     const embed = makeLogEmbed({
         title: "Channel Deleted",
-        color: 0xed4245,
+        color: runtimeSettings.deleteColor,
         emoji: "➖"
     }).addFields(
         { name: "Channel", value: `\`${channel.name || "Unknown"}\` • \`${channel.id}\``, inline: false },
         { name: "Type", value: `\`${channel.type}\``, inline: true },
-        { name: "Category", value: channel.parent ? `\`${channel.parent.name}\`` : "None", inline: true }
+        { name: "Category", value: channel.parent ? `\`${channel.parent.name}\`` : "None", inline: true },
+        { name: "🛡️ Deleted By", value: executor ? userLabel(executor) : "Unknown / audit log unavailable", inline: false }
     );
     await sendLog(channel.guild, LOG_CHANNELS.SERVER, embed);
 });
@@ -4592,38 +5751,46 @@ client.on(Events.ChannelUpdate, async (oldChannel, newChannel) => {
     if ("topic" in oldChannel && oldChannel.topic !== newChannel.topic) changes.push("**Topic:** changed");
     if (!changes.length) return;
 
+    const executor = await getRecentAuditExecutor(newChannel.guild, AuditLogEvent.ChannelUpdate, newChannel.id);
     const embed = makeLogEmbed({
         title: "Channel Updated",
         color: 0xfee75c,
         emoji: "📝",
         description: trimText(changes.join("\n"), 3900)
-    }).addFields({ name: "Channel", value: formatChannel(newChannel), inline: false });
+    }).addFields(
+        { name: "Channel", value: formatChannel(newChannel), inline: false },
+        { name: "🛡️ Changed By", value: executor ? userLabel(executor) : "Unknown / audit log unavailable", inline: false }
+    );
     await sendLog(newChannel.guild, LOG_CHANNELS.SERVER, embed);
 });
 
 client.on(Events.GuildRoleCreate, async role => {
     if (!LOG_CHANNELS.SERVER) return;
+    const executor = await getRecentAuditExecutor(role.guild, AuditLogEvent.RoleCreate, role.id);
     const embed = makeLogEmbed({
         title: "Server Role Created",
-        color: role.color || 0x57f287,
+        color: runtimeSettings.roleColor,
         emoji: "🎭"
     }).addFields(
         { name: "Role", value: `${role} • \`${role.name}\` • \`${role.id}\``, inline: false },
         { name: "Position", value: String(role.position), inline: true },
-        { name: "Managed", value: role.managed ? "Yes" : "No", inline: true }
+        { name: "Managed", value: role.managed ? "Yes" : "No", inline: true },
+        { name: "🛡️ Created By", value: executor ? userLabel(executor) : "Unknown / audit log unavailable", inline: false }
     );
     await sendLog(role.guild, LOG_CHANNELS.SERVER, embed);
 });
 
 client.on(Events.GuildRoleDelete, async role => {
     if (!LOG_CHANNELS.SERVER) return;
+    const executor = await getRecentAuditExecutor(role.guild, AuditLogEvent.RoleDelete, role.id);
     const embed = makeLogEmbed({
         title: "Server Role Deleted",
-        color: 0xed4245,
+        color: runtimeSettings.deleteColor,
         emoji: "🎭"
     }).addFields(
         { name: "Role", value: `\`${role.name}\` • \`${role.id}\``, inline: false },
-        { name: "Position", value: String(role.position), inline: true }
+        { name: "Position", value: String(role.position), inline: true },
+        { name: "🛡️ Deleted By", value: executor ? userLabel(executor) : "Unknown / audit log unavailable", inline: false }
     );
     await sendLog(role.guild, LOG_CHANNELS.SERVER, embed);
 });
@@ -4633,17 +5800,31 @@ client.on(Events.GuildRoleUpdate, async (oldRole, newRole) => {
     const changes = [];
     if (oldRole.name !== newRole.name) changes.push(`**Name:** ${oldRole.name} → ${newRole.name}`);
     if (oldRole.color !== newRole.color) changes.push(`**Color:** ${oldRole.hexColor} → ${newRole.hexColor}`);
-    if (oldRole.permissions.bitfield !== newRole.permissions.bitfield) changes.push("**Permissions:** changed");
+    const oldPermissions = new Set(oldRole.permissions.toArray());
+    const newPermissions = new Set(newRole.permissions.toArray());
+    const addedPermissions = [...newPermissions].filter(permission => !oldPermissions.has(permission));
+    const removedPermissions = [...oldPermissions].filter(permission => !newPermissions.has(permission));
+
+    if (addedPermissions.length) {
+        changes.push(`**Permissions Added:**\n${addedPermissions.map(permission => `+ \`${permission}\``).join("\n")}`);
+    }
+    if (removedPermissions.length) {
+        changes.push(`**Permissions Removed:**\n${removedPermissions.map(permission => `- \`${permission}\``).join("\n")}`);
+    }
     if (oldRole.hoist !== newRole.hoist) changes.push(`**Display separately:** ${oldRole.hoist ? "On" : "Off"} → ${newRole.hoist ? "On" : "Off"}`);
     if (oldRole.mentionable !== newRole.mentionable) changes.push(`**Mentionable:** ${oldRole.mentionable ? "On" : "Off"} → ${newRole.mentionable ? "On" : "Off"}`);
     if (!changes.length) return;
 
+    const executor = await getRecentAuditExecutor(newRole.guild, AuditLogEvent.RoleUpdate, newRole.id);
     const embed = makeLogEmbed({
         title: "Server Role Updated",
-        color: newRole.color || 0xfee75c,
+        color: runtimeSettings.roleColor,
         emoji: "🎭",
         description: trimText(changes.join("\n"), 3900)
-    }).addFields({ name: "Role", value: `${newRole} • \`${newRole.id}\``, inline: false });
+    }).addFields(
+        { name: "Role", value: `${newRole} • \`${newRole.id}\``, inline: false },
+        { name: "🛡️ Changed By", value: executor ? userLabel(executor) : "Unknown / audit log unavailable", inline: false }
+    );
     await sendLog(newRole.guild, LOG_CHANNELS.SERVER, embed);
 });
 
