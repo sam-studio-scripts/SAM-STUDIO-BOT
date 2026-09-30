@@ -4647,45 +4647,39 @@ client.on(
 
                 // ================= BUILD FORM FIELDS =================
 
+                const ticketFieldNames = {
+                    help: "❓ Question",
+                    script_issue: "🛠️ Script Issue",
+                    partnership_details: "🤝 Partnership Details"
+                };
+
                 const fields = [];
 
-                interaction.fields.fields.forEach(
-                    f => {
+                interaction.fields.fields.forEach(f => {
+                    fields.push({
+                        name: ticketFieldNames[f.customId] ||
+                            f.customId
+                                .replace(/_/g, " ")
+                                .replace(/\b\w/g, char => char.toUpperCase()),
+                        value: trimText(f.value || "N/A", 1000),
+                        inline: false
+                    });
+                });
 
-                        fields.push({
+                // ================= CLEAN TICKET EMBED =================
+                // Keep the public ticket card simple. Detailed account data stays
+                // in the private ticket log instead of being shown inside the ticket.
 
-                            name:
-                                f.customId
-                                    .toUpperCase()
-                                    .replace(
-                                        /_/g,
-                                        " "
-                                    ),
-
-                            value:
-                                `\`\`\`${trimText(f.value || "N/A", 950)}\`\`\``
-                        });
-                    }
-                );
-
-                // ================= TICKET EMBED =================
-
-                const openerMember = interaction.member;
                 const embed = makeLogEmbed({
                     title: `${TICKET_LABELS[type] || "Support"} Ticket`,
                     color: 0x5865f2,
                     emoji: EMOJIS[type] || "🎫",
-                    user: interaction.user,
                     description:
                         `Welcome ${interaction.user}. Thank you for contacting **SAM STUDIO**.\n` +
-                        `A staff member will review your request shortly. Please keep all relevant details in this channel.`,
+                        `A staff member will review your request shortly.`,
                     footer: `Ticket opened by ${interaction.user.tag} • SAM STUDIO Support`
                 }).addFields(
-                    { name: "👤 Opened By", value: userLabel(interaction.user), inline: false },
-                    { name: "🎟️ Category", value: TICKET_LABELS[type] || type, inline: true },
-                    { name: "🌐 Client Language", value: `\`${interaction.locale || "Unknown"}\``, inline: true },
-                    { name: "📅 Account Created", value: `<t:${Math.floor(interaction.user.createdTimestamp / 1000)}:R>`, inline: true },
-                    { name: "📥 Joined Server", value: openerMember?.joinedTimestamp ? `<t:${Math.floor(openerMember.joinedTimestamp / 1000)}:R>` : "Unknown", inline: true },
+                    { name: "👤 Opened By", value: `${interaction.user}`, inline: false },
                     ...fields
                 );
 
