@@ -133,6 +133,7 @@ function loadBotState() {
                 giveaways: {},
                 inviteStats: {},
                 memberInviters: {},
+                moderationHistory: {},
                 settings: {},
                 userLocales: {}
             };
@@ -147,12 +148,13 @@ function loadBotState() {
             giveaways: parsed.giveaways && typeof parsed.giveaways === "object" ? parsed.giveaways : {},
             inviteStats: parsed.inviteStats && typeof parsed.inviteStats === "object" ? parsed.inviteStats : {},
             memberInviters: parsed.memberInviters && typeof parsed.memberInviters === "object" ? parsed.memberInviters : {},
+            moderationHistory: parsed.moderationHistory && typeof parsed.moderationHistory === "object" ? parsed.moderationHistory : {},
             settings: parsed.settings && typeof parsed.settings === "object" ? parsed.settings : {},
             userLocales: parsed.userLocales && typeof parsed.userLocales === "object" ? parsed.userLocales : {}
         };
     } catch (error) {
         console.error("Could not load SAM bot state:", error.message);
-        return { warnings: {}, protections: {}, giveaways: {}, inviteStats: {}, memberInviters: {}, settings: {}, userLocales: {} };
+        return { warnings: {}, protections: {}, giveaways: {}, inviteStats: {}, memberInviters: {}, moderationHistory: {}, settings: {}, userLocales: {} };
     }
 }
 
@@ -165,6 +167,7 @@ let activeGiveaways = new Map(Object.entries(botState.giveaways || {}));
 let invites = new Map();
 let inviteStats = botState.inviteStats || {};
 let memberInviters = botState.memberInviters || {};
+let moderationHistory = botState.moderationHistory || {};
 let userLocales = botState.userLocales || {};
 
 const DEFAULT_LOG_APPEARANCE = {
@@ -226,6 +229,7 @@ function saveBotState() {
         botState.giveaways = Object.fromEntries(activeGiveaways);
         botState.inviteStats = inviteStats;
         botState.memberInviters = memberInviters;
+        botState.moderationHistory = moderationHistory;
         botState.userLocales = userLocales;
         botState.settings = {
             ...(botState.settings || {}),
@@ -408,6 +412,22 @@ function makeActionId(prefix = "LOG") {
     return `${prefix}-${stamp}-${rand}`;
 }
 
+const LOG_CHANNEL_META = {
+    MOD: { name: "sam-mod-logs", label: "Moderation Logs" },
+    TICKET: { name: "sam-ticket-logs", label: "Ticket Logs" },
+    MSG: { name: "sam-message-logs", label: "Message Logs" },
+    VC: { name: "sam-voice-logs", label: "Voice Logs" },
+    JOIN: { name: "sam-join-leave-logs", label: "Join & Leave Logs" },
+    ROLE: { name: "sam-role-logs", label: "Role Logs" },
+    SERVER: { name: "sam-server-logs", label: "Server Logs" },
+    INVITE: { name: "sam-invite-logs", label: "Invite Logs" },
+    NICKNAME: { name: "sam-nickname-logs", label: "Nickname Logs" }
+};
+
+function logKeyFromChannelId(channelId) {
+    return Object.keys(LOG_CHANNELS).find(key => LOG_CHANNELS[key] === channelId) || null;
+}
+
 function resolvePremiumLogColor(channelId, title = "") {
     if (/deleted|ban|kick|timeout|warn|blocked|violation|spam|failed|cancel/i.test(title)) {
         return runtimeSettings.deleteColor;
@@ -459,24 +479,106 @@ function applyPremiumLogStyling(embed, channelId) {
     return embed;
 }
 
-async function sendLog(guild, channelId, embed, extra = {}) {
-    if (!guild || !channelId) return null;
+async function ensureLogChannel(guild, key) {
+    if (!guild || !key) return null;
 
-    const channel =
-        guild.channels.cache.get(channelId) ||
-        await guild.channels.fetch(channelId).catch(() => null);
+    const configuredId = LOG_CHANNELS[key];
+    let channel = configuredId
+        ? guild.channels.cache.get(configuredId) || await guild.channels.fetch(configuredId).catch(() => null)
+        : null;
+
+    if (channel && channel.isTextBased() && typeof channel.send === "function") {
+        return channel;
+    }
+
+    const meta = LOG_CHANNEL_META[key] || { name: `sam-${String(key).toLowerCase()}-logs`, label: `${key} Logs` };
+    const existingByName = guild.channels.cache.find(ch => ch.type === ChannelType.GuildText && ch.name === meta.name);
+    if (existingByName) {
+        LOG_CHANNELS[key] = existingByName.id;
+        saveBotState();
+        return existingByName;
+    }
+
+    const staffRole = STAFF_ROLE_ID ? guild.roles.cache.get(STAFF_ROLE_ID) || await guild.roles.fetch(STAFF_ROLE_ID).catch(() => null) : null;
+
+    const permissionOverwrites = [
+        {
+            id: guild.roles.everyone.id,
+            deny: [PermissionsBitField.Flags.ViewChannel]
+        },
+        {
+            id: guild.members.me.id,
+            allow: [
+                PermissionsBitField.Flags.ViewChannel,
+                PermissionsBitField.Flags.SendMessages,
+                PermissionsBitField.Flags.EmbedLinks,
+                PermissionsBitField.Flags.AttachFiles,
+                PermissionsBitField.Flags.ReadMessageHistory,
+                PermissionsBitField.Flags.ManageChannels
+            ]
+        }
+    ];
+
+    if (staffRole) {
+        permissionOverwrites.push({
+            id: staffRole.id,
+            allow: [
+                PermissionsBitField.Flags.ViewChannel,
+                PermissionsBitField.Flags.SendMessages,
+                PermissionsBitField.Flags.ReadMessageHistory
+            ]
+        });
+    }
+
+    channel = await guild.channels.create({
+        name: meta.name,
+        type: ChannelType.GuildText,
+        topic: `Auto-created hidden log channel for ${meta.label}`,
+        permissionOverwrites
+    }).catch(error => {
+        console.error(`[LOG] Could not auto-create ${key} log channel in ${guild.name}:`, error.message);
+        return null;
+    });
+
+    if (channel) {
+        LOG_CHANNELS[key] = channel.id;
+        saveBotState();
+    }
+
+    return channel;
+}
+
+async function ensureAllLogChannels(guild) {
+    if (!guild) return;
+    for (const key of Object.keys(LOG_CHANNELS)) {
+        await ensureLogChannel(guild, key).catch(() => null);
+    }
+}
+
+async function sendLog(guild, channelId, embed, extra = {}) {
+    if (!guild) return null;
+
+    const key = extra.logKey || logKeyFromChannelId(channelId);
+    const channel = key
+        ? await ensureLogChannel(guild, key)
+        : channelId
+            ? guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId).catch(() => null)
+            : null;
 
     if (!channel || !channel.isTextBased() || typeof channel.send !== "function") {
         return null;
     }
 
-    applyPremiumLogStyling(embed, channelId);
+    applyPremiumLogStyling(embed, channel.id);
+
+    const payload = { ...extra };
+    delete payload.logKey;
 
     return channel.send({
         embeds: [embed],
-        ...extra
+        ...payload
     }).catch(error => {
-        console.error(`[LOG] Could not send log to ${channelId}:`, error.message);
+        console.error(`[LOG] Could not send log to ${channel.id}:`, error.message);
         return null;
     });
 }
@@ -577,7 +679,7 @@ async function getRecentAuditExecutor(guild, type, targetId) {
         const logs = await guild.fetchAuditLogs({ type, limit: 6 });
         const now = Date.now();
         const entry = logs.entries.find(item =>
-            item.target?.id === targetId &&
+            (!targetId || item.target?.id === targetId) &&
             Math.abs(now - item.createdTimestamp) < 10_000
         );
         return entry?.executor || null;
@@ -742,6 +844,59 @@ function getWarningHistory(userId) {
         });
     }
     return warnings[userId];
+}
+
+function getModerationHistory(userId) {
+    if (!Array.isArray(moderationHistory[userId])) moderationHistory[userId] = [];
+    return moderationHistory[userId];
+}
+
+function recordModerationAction(userId, action, moderatorId, reason, extra = {}) {
+    if (!userId) return [];
+    const history = getModerationHistory(userId);
+    history.push({
+        action,
+        moderatorId: moderatorId || null,
+        reason: reason || "No reason provided",
+        at: Date.now(),
+        ...extra
+    });
+    moderationHistory[userId] = history.slice(-50);
+    saveBotState();
+    return moderationHistory[userId];
+}
+
+const DANGEROUS_ROLE_PERMISSIONS = [
+    "Administrator",
+    "ManageGuild",
+    "ManageRoles",
+    "ManageChannels",
+    "BanMembers",
+    "KickMembers",
+    "ModerateMembers",
+    "ManageWebhooks",
+    "ManageMessages",
+    "MentionEveryone"
+];
+
+function getDangerousPermissions(role) {
+    if (!role?.permissions) return [];
+    return role.permissions.toArray().filter(permission => DANGEROUS_ROLE_PERMISSIONS.includes(permission));
+}
+
+function summarizeDangerousRoles(rolesCollection) {
+    if (!rolesCollection?.size) return null;
+
+    const lines = [];
+    for (const role of rolesCollection.values()) {
+        const dangerous = getDangerousPermissions(role);
+        if (dangerous.length) {
+            lines.push(`${role} → ${dangerous.map(permission => `\`${permission}\``).join(", ")}`);
+        }
+    }
+
+    return lines.length ? trimText(lines.join("
+"), 1024) : null;
 }
 
 function getWelcomeTemplate() {
@@ -2376,6 +2531,13 @@ const commands = [
         ),
 
     new SlashCommandBuilder()
+        .setName("modhistory")
+        .setDescription("View a member's moderation history")
+        .addUserOption(o =>
+            o.setName("user").setDescription("User").setRequired(false)
+        ),
+
+    new SlashCommandBuilder()
         .setName("clearwarnings")
         .setDescription("Clear a member's warning history")
         .addUserOption(o =>
@@ -2695,6 +2857,7 @@ client.once(
 
         // Ticket permission + invite tracker setup for every connected guild.
         for (const guild of client.guilds.cache.values()) {
+            await ensureAllLogChannels(guild).catch(() => {});
             await syncTicketStaffPermissions(guild).catch(() => {});
 
             try {
@@ -3265,6 +3428,9 @@ client.on(
                         ended: false
                     });
                     saveBotState();
+                    recordModerationAction(target.id, "warn", interaction.user.id, reason, {
+                        warningCount: history.length
+                    });
 
                     const log = makeLogEmbed({
                         title: "Giveaway Started",
@@ -3435,6 +3601,10 @@ client.on(
                         actionDetail = "Timeout removed";
                     }
 
+                    recordModerationAction(target.id, cmd, interaction.user.id, reason, {
+                        durationMinutes: cmd === "mute" ? interaction.options.getInteger("minutes") : undefined
+                    });
+
                     const log = makeLogEmbed({
                         title,
                         color,
@@ -3445,10 +3615,7 @@ client.on(
                         { name: "🛡️ Moderator", value: userLabel(interaction.user), inline: false },
                         { name: "📌 Action", value: actionDetail, inline: true },
                         { name: "📝 Reason", value: trimText(reason, 1024), inline: false },
-                        { name: "💬 Channel", value: formatChannel(interaction.channel), inline: false },
-                        { name: "🖥️ Target Client", value: clientPlatformLabel(target), inline: true },
-                        { name: "🌐 Target Known Language", value: knownLocaleLabel(target.id), inline: false },
-                        { name: "🌐 Moderator Command Locale", value: `\`${interaction.locale || "Unknown"}\``, inline: true }
+                        { name: "💬 Channel", value: formatChannel(interaction.channel), inline: false }
                     );
 
                     await sendLog(interaction.guild, LOG_CHANNELS.MOD, log);
@@ -3504,9 +3671,7 @@ client.on(
                         { name: "🛡️ Moderator", value: userLabel(interaction.user), inline: false },
                         { name: "📊 Total Warnings", value: `**${history.length}**`, inline: true },
                         { name: "📝 Reason", value: trimText(reason, 1024), inline: false },
-                        { name: "💬 Channel", value: formatChannel(interaction.channel), inline: false },
-                        { name: "🖥️ Client", value: clientPlatformLabel(target), inline: true },
-                        { name: "🌐 Known Language", value: knownLocaleLabel(target.id), inline: false }
+                        { name: "💬 Channel", value: formatChannel(interaction.channel), inline: false }
                     );
 
                     await sendLog(interaction.guild, LOG_CHANNELS.MOD, log);
@@ -3560,6 +3725,53 @@ client.on(
                     });
                 }
 
+                if (cmd === "modhistory") {
+                    if (!interaction.member.permissions.has(PermissionsBitField.Flags.ModerateMembers)) {
+                        return interaction.reply({
+                            content: "❌ Moderate Members permission required.",
+                            flags: MessageFlags.Ephemeral
+                        });
+                    }
+
+                    const targetUser = interaction.options.getUser("user") || interaction.user;
+                    const targetMember = interaction.guild.members.cache.get(targetUser.id) || await interaction.guild.members.fetch(targetUser.id).catch(() => null);
+                    const history = getModerationHistory(targetUser.id);
+                    const recent = history.slice(-10).reverse();
+                    const activeTimeout = targetMember?.communicationDisabledUntilTimestamp && targetMember.communicationDisabledUntilTimestamp > Date.now()
+                        ? `<t:${Math.floor(targetMember.communicationDisabledUntilTimestamp / 1000)}:F>`
+                        : "None";
+
+                    const description = recent.length
+                        ? recent.map(item => {
+                            const when = item.at ? `<t:${Math.floor(item.at / 1000)}:f>` : "Unknown time";
+                            const mod = item.moderatorId ? `<@${item.moderatorId}>` : "Unknown";
+                            const extraBits = [];
+                            if (item.durationMinutes) extraBits.push(`Duration: **${item.durationMinutes}m**`);
+                            if (item.warningCount) extraBits.push(`Warnings: **${item.warningCount}**`);
+                            return `**${String(item.action || "action").toUpperCase()}** • ${when} • ${mod}
+${trimText(item.reason || "No reason provided", 220)}${extraBits.length ? `
+${extraBits.join(" • ")}` : ""}`;
+                        }).join("
+
+")
+                        : "No moderation history recorded by this bot yet.";
+
+                    const embed = makeLogEmbed({
+                        title: `Moderation History • ${targetUser.username}`,
+                        color: history.length ? runtimeSettings.moderationColor : 0x57f287,
+                        emoji: "📚",
+                        user: targetUser,
+                        description: trimText(description, 3900),
+                        footer: `Total actions: ${history.length} • Showing up to 10 latest`
+                    }).addFields(
+                        { name: "👤 Member", value: userLabel(targetUser), inline: false },
+                        { name: "⚠️ Warning Count", value: `**${getWarningHistory(targetUser.id).length}**`, inline: true },
+                        { name: "⏱️ Active Timeout", value: activeTimeout, inline: true }
+                    );
+
+                    return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+                }
+
                 if (cmd === "clearwarnings") {
                     if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
                         return interaction.reply({
@@ -3572,6 +3784,10 @@ client.on(
                     const oldCount = getWarningHistory(target.id).length;
                     warnings[target.id] = [];
                     saveBotState();
+                    recordModerationAction(target.id, "clearwarnings", interaction.user.id, `Cleared ${oldCount} warning(s).`, {
+                        warningCount: 0,
+                        clearedWarnings: oldCount
+                    });
 
                     const log = makeLogEmbed({
                         title: "Warnings Cleared",
@@ -5670,9 +5886,7 @@ client.on(
                 { name: "👤 Member", value: userLabel(newMember.user), inline: false },
                 { name: "⬅️ Old Nickname", value: trimText(oldMember.nickname || "None", 1024), inline: true },
                 { name: "➡️ New Nickname", value: trimText(newMember.nickname || "None", 1024), inline: true },
-                { name: "🛡️ Changed By", value: executor ? userLabel(executor) : "Unknown / self-change / audit log unavailable", inline: false },
-                { name: "🖥️ Client", value: clientPlatformLabel(newMember), inline: true },
-                { name: "🌐 Known Language", value: knownLocaleLabel(newMember.id), inline: false }
+                { name: "🛡️ Changed By", value: executor ? userLabel(executor) : "Unknown / self-change / audit log unavailable", inline: false }
             );
 
             await sendLog(newMember.guild, LOG_CHANNELS.NICKNAME, embed);
@@ -5868,6 +6082,26 @@ client.on(Events.InviteDelete, async invite => {
     }
 });
 
+client.on(Events.WebhooksUpdate, async channel => {
+    if (!channel?.guild || !LOG_CHANNELS.SERVER) return;
+
+    const executor =
+        await getRecentAuditExecutor(channel.guild, AuditLogEvent.WebhookCreate, null) ||
+        await getRecentAuditExecutor(channel.guild, AuditLogEvent.WebhookUpdate, null) ||
+        await getRecentAuditExecutor(channel.guild, AuditLogEvent.WebhookDelete, null);
+
+    const embed = makeLogEmbed({
+        title: "Webhook Activity Detected",
+        color: 0xE67E22,
+        emoji: "🪝"
+    }).addFields(
+        { name: "Channel", value: formatChannel(channel), inline: false },
+        { name: "🛡️ Changed By", value: executor ? userLabel(executor) : "Unknown / audit log unavailable", inline: false }
+    );
+
+    await sendLog(channel.guild, LOG_CHANNELS.SERVER, embed);
+});
+
 // =====================================================
 // MEMBER JOIN
 // =====================================================
@@ -5963,6 +6197,20 @@ client.on(
             }
         }
 
+        if (member.user.bot && LOG_CHANNELS.SERVER) {
+            const executor = await getRecentAuditExecutor(member.guild, AuditLogEvent.BotAdd, member.id);
+            const botLog = makeLogEmbed({
+                title: "Bot Added To Server",
+                color: 0x5865f2,
+                emoji: "🤖",
+                user: member.user
+            }).addFields(
+                { name: "Bot", value: userLabel(member.user), inline: false },
+                { name: "🛡️ Added By", value: executor ? userLabel(executor) : "Unknown / audit log unavailable", inline: false }
+            );
+            await sendLog(member.guild, LOG_CHANNELS.SERVER, botLog);
+        }
+
         // ================= INVITE TRACKER =================
 
         let inviteInfo = null;
@@ -6028,6 +6276,7 @@ client.on(
         }
 
         if (LOG_CHANNELS.JOIN) {
+            const accountAgeDays = Math.floor((Date.now() - member.user.createdTimestamp) / 86_400_000);
             const joinLog = makeLogEmbed({
                 title: "Member Joined Server",
                 color: 0x57f287,
@@ -6039,6 +6288,13 @@ client.on(
                 { name: "Account Created", value: `<t:${Math.floor(member.user.createdTimestamp / 1000)}:F>`, inline: false },
                 { name: "Invite", value: inviteInfo ? `\`${inviteInfo.code}\` by ${inviteInfo.inviter}` : "Unknown", inline: false }
             );
+            if (accountAgeDays < 7) {
+                joinLog.addFields({
+                    name: "⚠️ Account Age Alert",
+                    value: `This account is only **${accountAgeDays}** day(s) old.`,
+                    inline: false
+                });
+            }
             await sendLog(member.guild, LOG_CHANNELS.JOIN, joinLog);
         }
     }
@@ -6091,6 +6347,7 @@ client.on(
             }).addFields(
                 { name: "Member", value: userLabel(member.user), inline: false },
                 { name: "Joined Server", value: member.joinedTimestamp ? `<t:${Math.floor(member.joinedTimestamp / 1000)}:F>` : "Unknown", inline: false },
+                { name: "Time In Server", value: member.joinedTimestamp ? `<t:${Math.floor(member.joinedTimestamp / 1000)}:R>` : "Unknown", inline: true },
                 { name: "Members Remaining", value: `**${member.guild.memberCount}**`, inline: true },
                 { name: "Originally Invited By", value: inviterUser ? userLabel(inviterUser) : tracked?.inviterId ? `<@${tracked.inviterId}> • \`${tracked.inviterId}\`` : "Unknown", inline: false }
             );
